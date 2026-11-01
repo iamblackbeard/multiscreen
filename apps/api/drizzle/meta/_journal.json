@@ -15,6 +15,13 @@
       "when": 1793535000000,
       "tag": "0001_streamer_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793536000000,
+      "tag": "0002_active_multicam_sessions",
+      "breakpoints": true
     }
   ]
 }

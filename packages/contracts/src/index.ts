@@ -116,3 +116,34 @@ export const streamerPreferencesSchema = z
   });
 
 export type StreamerPreferences = z.infer<typeof streamerPreferencesSchema>;
+
+export const publicCameraSchema = z.object({
+  label: z.string().min(1).max(40),
+  slot: cameraSlotSchema,
+});
+
+export const activeMulticamSessionSchema = z.object({
+  active: z.literal(true),
+  cameras: z.array(publicCameraSchema).min(2).max(4),
+  expiresAt: z.iso.datetime(),
+  layout: z.literal("2x2"),
+  mainSlot: cameraSlotSchema,
+  protocolVersion: z.literal(1),
+  revision: z.number().int().positive(),
+});
+
+export const inactiveMulticamSessionSchema = z.object({
+  active: z.literal(false),
+});
+
+export const publicMulticamSessionSchema = z.discriminatedUnion("active", [
+  activeMulticamSessionSchema,
+  inactiveMulticamSessionSchema,
+]);
+
+export type ActiveMulticamSession = z.infer<
+  typeof activeMulticamSessionSchema
+>;
+export type PublicMulticamSession = z.infer<
+  typeof publicMulticamSessionSchema
+>;

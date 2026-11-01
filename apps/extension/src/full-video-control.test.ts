@@ -428,3 +428,109 @@ describe("Twitch full-video control", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Published session integration
+// ---------------------------------------------------------------------------
+
+describe("Twitch full-video control with published session", () => {
+  function setupPlayer() {
+    document.body.innerHTML = `
+      <div data-a-target="video-player">
+        <video></video>
+        <button data-a-target="player-settings-button">Settings</button>
+      </div>
+    `;
+    const settings = document.querySelector<HTMLButtonElement>(
+      '[data-a-target="player-settings-button"]',
+    )!;
+    const video = document.querySelector<HTMLVideoElement>("video")!;
+    return { settings, video };
+  }
+
+  const activeSession = {
+    active: true as const,
+    cameras: [
+      { label: "Host", slot: "topLeft" as const },
+      { label: "Close-up", slot: "topRight" as const },
+      { label: "Wide", slot: "bottomRight" as const },
+    ],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    layout: "2x2" as const,
+    mainSlot: "topRight" as const,
+    protocolVersion: 1 as const,
+    revision: 1,
+  };
+
+  it("shows published camera labels instead of hardcoded quadrant names", () => {
+    const { settings } = setupPlayer();
+
+    mountControl(document, { session: activeSession });
+
+    const control = settings.previousElementSibling as HTMLElement;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    fireEvent.click(ui.getByRole("button", { name: "Multicam video options" }));
+
+    expect(
+      ui.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Host", "Close-up", "Wide", "Show Grid"]);
+  });
+
+  it("starts with the published main camera selected", () => {
+    const { settings, video } = setupPlayer();
+
+    mountControl(document, { session: activeSession });
+
+    const control = settings.previousElementSibling as HTMLElement;
+    expect(control).toBeDefined();
+    // main camera is topRight → scale(2) with top right origin
+    expect(video.style.transform).toBe("scale(2)");
+    expect(video.style.transformOrigin).toBe("top right");
+  });
+
+  it("Show Grid restores the uncropped composite", () => {
+    const { settings, video } = setupPlayer();
+
+    mountControl(document, { session: activeSession });
+
+    const control = settings.previousElementSibling as HTMLElement;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    fireEvent.click(ui.getByRole("button", { name: "Multicam video options" }));
+    fireEvent.click(ui.getByRole("menuitem", { name: "Show Grid" }));
+
+    expect(video.style.transform).toBe("");
+  });
+
+  it("selecting a published camera label crops to that slot", () => {
+    const { settings, video } = setupPlayer();
+
+    mountControl(document, { session: activeSession });
+
+    const control = settings.previousElementSibling as HTMLElement;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    fireEvent.click(ui.getByRole("button", { name: "Multicam video options" }));
+    fireEvent.click(ui.getByRole("menuitem", { name: "Host" }));
+
+    expect(video.style.transform).toBe("scale(2)");
+    expect(video.style.transformOrigin).toBe("top left");
+  });
+
+  it("does not mount the control when session is inactive", () => {
+    const { settings } = setupPlayer();
+
+    mountControl(document, { session: { active: false } });
+
+    // No control should have been inserted before settings
+    const previous = settings.previousElementSibling as HTMLElement | null;
+    expect(previous?.dataset?.multicamFullVideoControl).toBeUndefined();
+  });
+
+  it("does not mount the control when session is absent", () => {
+    const { settings } = setupPlayer();
+
+    mountControl(document, { session: null });
+
+    const previous = settings.previousElementSibling as HTMLElement | null;
+    expect(previous?.dataset?.multicamFullVideoControl).toBeUndefined();
+  });
+});
