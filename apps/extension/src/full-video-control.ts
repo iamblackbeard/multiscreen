@@ -1,6 +1,10 @@
 export type RemoveFullVideoControl = () => void;
+export type FullVideoControlOptions = {
+  isMulticamStateValid?: () => boolean;
+};
 
 const SETTINGS_SELECTOR = '[data-a-target="player-settings-button"]';
+const ADVERTISEMENT_SELECTOR = '[data-a-target="video-ad-label"]';
 const QUADRANT_ORIGINS = new Map<string, string>([
   ["Top Left", "top left"],
   ["Top Right", "top right"],
@@ -42,7 +46,10 @@ function selectVideoChoice(page: Document, choice: string): void {
   }
 }
 
-function insertControl(page: Document): HTMLElement | undefined {
+function insertControl(
+  page: Document,
+  onChoice = (choice: string) => selectVideoChoice(page, choice),
+): HTMLElement | undefined {
   const settings = page.querySelector<HTMLElement>(SETTINGS_SELECTOR);
   if (!settings) return undefined;
 
@@ -113,7 +120,7 @@ function insertControl(page: Document): HTMLElement | undefined {
   });
   choices.forEach((choice) => {
     choice.addEventListener("click", () => {
-      selectVideoChoice(page, choice.textContent ?? "");
+      onChoice(choice.textContent ?? "");
       menu.hidden = true;
       trigger.setAttribute("aria-expanded", "false");
     });
@@ -123,10 +130,44 @@ function insertControl(page: Document): HTMLElement | undefined {
   return host;
 }
 
-export function mountFullVideoControl(page: Document): RemoveFullVideoControl {
-  let host = insertControl(page);
+export function mountFullVideoControl(
+  page: Document,
+  options: FullVideoControlOptions = {},
+): RemoveFullVideoControl {
+  let selectedChoice = "All Screen";
+  let advertisementWasPlaying = Boolean(
+    page.querySelector(ADVERTISEMENT_SELECTOR),
+  );
+  let multicamIsSuspended = advertisementWasPlaying;
+  const onChoice = (choice: string) => {
+    selectedChoice = choice;
+    selectVideoChoice(page, choice);
+  };
+  let host = insertControl(page, onChoice);
+  if (host && advertisementWasPlaying) host.hidden = true;
   const observer = new MutationObserver(() => {
-    if (!host?.isConnected) host = insertControl(page);
+    if (page.querySelector(ADVERTISEMENT_SELECTOR)) {
+      page
+        .querySelectorAll<HTMLVideoElement>("video")
+        .forEach(restoreVideoStyles);
+      if (host) host.hidden = true;
+      advertisementWasPlaying = true;
+      multicamIsSuspended = true;
+      return;
+    }
+    if (advertisementWasPlaying) {
+      const stateIsValid = options.isMulticamStateValid?.() ?? true;
+      multicamIsSuspended = !stateIsValid;
+      if (stateIsValid) {
+        selectVideoChoice(page, selectedChoice);
+        if (host) host.hidden = false;
+      }
+      advertisementWasPlaying = false;
+    }
+    if (!host?.isConnected) {
+      host = insertControl(page, onChoice);
+      if (host && multicamIsSuspended) host.hidden = true;
+    }
   });
 
   observer.observe(page.documentElement, { childList: true, subtree: true });
