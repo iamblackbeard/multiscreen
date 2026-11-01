@@ -1,0 +1,25 @@
+{
+  "name": "twitch-multicam",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names api,dashboard,extension --prefix-colors blue,magenta,green \"npm run dev --workspace @multicam/api\" \"npm run dev --workspace @multicam/dashboard\" \"npm run dev --workspace @multicam/extension\"",
+    "build": "npm run build --workspaces --if-present",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "vitest run",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.6",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.wxt/
+.output/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.agents/
+.scratch/
+twitch-multicam-handoff.md
+AGENTS.md
+README.md
