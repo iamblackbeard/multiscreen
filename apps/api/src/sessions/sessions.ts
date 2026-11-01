@@ -1,7 +1,10 @@
 import {
   activeMulticamSessionSchema,
   inactiveMulticamSessionSchema,
+  ownerMulticamStatusSchema,
   publicMulticamSessionSchema,
+  type ActiveMulticamSession,
+  type StreamerPreferences,
 } from "@multicam/contracts";
 import type { Request, Response } from "express";
 
@@ -17,6 +20,23 @@ export interface MulticamSessionDependencies {
   streamStatus: TwitchStreamStatusClient;
 }
 
+function preferencesDifferFromLive(
+  preferences: StreamerPreferences,
+  live: ActiveMulticamSession,
+) {
+  const liveCameras = new Map(
+    live.cameras.map((camera) => [camera.slot, camera.label]),
+  );
+  return (
+    preferences.mainSlot !== live.mainSlot ||
+    preferences.slots.some(
+      (camera) =>
+        camera.active !== liveCameras.has(camera.slot) ||
+        (camera.active && liveCameras.get(camera.slot) !== camera.label),
+    )
+  );
+}
+
 export function createMulticamSessionHandlers(
   authStore: AuthStore,
   preferenceStore: PreferenceStore,
@@ -26,16 +46,97 @@ export function createMulticamSessionHandlers(
     streamStatus,
   }: MulticamSessionDependencies,
 ) {
+  async function owner(request: Request, response: Response) {
+    const streamer = await authenticatedStreamer(request, authStore);
+    if (!streamer) {
+      response.status(401).json({
+        code: "NOT_AUTHENTICATED",
+        message: "Sign in with Twitch to continue.",
+      });
+    }
+    return streamer;
+  }
+
   return {
-    async enable(request: Request, response: Response) {
-      const streamer = await authenticatedStreamer(request, authStore);
-      if (!streamer) {
-        response.status(401).json({
-          code: "NOT_AUTHENTICATED",
-          message: "Sign in with Twitch to continue.",
+    async disable(request: Request, response: Response) {
+      const streamer = await owner(request, response);
+      if (!streamer) return;
+      await sessionStore.disable(streamer.twitchUserId);
+      response.json({ active: false });
+    },
+    async status(request: Request, response: Response) {
+      const streamer = await owner(request, response);
+      if (!streamer) return;
+      const session = await sessionStore.findByBroadcasterId(
+        streamer.twitchUserId,
+      );
+      if (!session) {
+        response.json(ownerMulticamStatusSchema.parse({ active: false }));
+        return;
+      }
+      const preferences = await preferenceStore.find(streamer.twitchUserId);
+      const live = session.snapshot;
+      const hasUnpublishedChanges =
+        !preferences || preferencesDifferFromLive(preferences, live);
+      response.json(
+        ownerMulticamStatusSchema.parse({
+          active: true,
+          hasUnpublishedChanges,
+          live,
+        }),
+      );
+    },
+    async publish(request: Request, response: Response) {
+      const streamer = await owner(request, response);
+      if (!streamer) return;
+      const preferences = await preferenceStore.find(streamer.twitchUserId);
+      if (!preferences) {
+        response.status(409).json({
+          code: "PREFERENCES_NOT_FOUND",
+          message: "Save camera preferences before publishing Multicam.",
         });
         return;
       }
+      const current = await sessionStore.findByBroadcasterId(
+        streamer.twitchUserId,
+      );
+      if (!current) {
+        response.status(409).json({
+          code: "MULTICAM_NOT_ACTIVE",
+          message: "Enable Multicam before publishing an update.",
+        });
+        return;
+      }
+      const hasUnpublishedChanges = preferencesDifferFromLive(
+        preferences,
+        current.snapshot,
+      );
+      if (!hasUnpublishedChanges) {
+        response.status(409).json({
+          code: "NO_UNPUBLISHED_CHANGES",
+          message: "The live configuration already matches saved preferences.",
+        });
+        return;
+      }
+      const published = await sessionStore.publishDraft({
+        broadcasterId: streamer.twitchUserId,
+        cameras: preferences.slots
+          .filter((camera) => camera.active)
+          .map(({ label, slot }) => ({ label, slot })),
+        mainSlot: preferences.mainSlot,
+      });
+      if (!published) {
+        response.status(409).json({
+          code: "MULTICAM_NOT_ACTIVE",
+          message: "Enable Multicam before publishing an update.",
+        });
+        return;
+      }
+      response.json(activeMulticamSessionSchema.parse(published));
+    },
+    async enable(request: Request, response: Response) {
+      const streamer = await owner(request, response);
+      if (!streamer) return;
       const preferences = await preferenceStore.find(streamer.twitchUserId);
       if (!preferences) {
         response.status(409).json({

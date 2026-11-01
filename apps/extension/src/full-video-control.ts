@@ -1,6 +1,12 @@
-import type { PublicMulticamSession } from "@multicam/contracts";
+import type {
+  ActiveMulticamSession,
+  PublicMulticamSession,
+} from "@multicam/contracts";
 
-export type RemoveFullVideoControl = () => void;
+export type FullVideoControl = (() => void) & {
+  updateSession(session: PublicMulticamSession): void;
+};
+export type RemoveFullVideoControl = FullVideoControl;
 export type FullVideoControlOptions = {
   isMulticamStateValid?: () => boolean;
   /** Published session from the Multicam API. When absent or inactive the
@@ -85,12 +91,13 @@ function selectVideoChoice(
 
 type InsertControlOptions = {
   choices: string[];
+  notice?: string;
   onChoice?: (choice: string) => void;
 };
 
 function insertControl(
   page: Document,
-  { choices, onChoice = () => {} }: InsertControlOptions,
+  { choices, notice, onChoice = () => {} }: InsertControlOptions,
 ): HTMLElement | undefined {
   const settings = page.querySelector<HTMLElement>(SETTINGS_SELECTOR);
   if (!settings) return undefined;
@@ -98,10 +105,6 @@ function insertControl(
   const host = page.createElement("span");
   host.dataset.multicamFullVideoControl = "";
   const shadow = host.attachShadow({ mode: "open" });
-
-  const menuItems = choices
-    .map((label) => `<button type="button" role="menuitem">${label}</button>`)
-    .join("\n      ");
 
   shadow.innerHTML = `
     <style>
@@ -142,19 +145,38 @@ function insertControl(
         width: 100%;
       }
       .menu button:hover, .menu button:focus-visible { background: #3f3f46; }
+      .notice {
+        background: #18181b;
+        border-radius: 0.4rem;
+        bottom: calc(100% + 0.5rem);
+        color: white;
+        padding: 0.6rem 0.75rem;
+        position: absolute;
+        right: 0;
+        width: max-content;
+      }
     </style>
     <button class="trigger" type="button" aria-label="Multicam video options" aria-haspopup="menu" aria-expanded="false">
       <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor">
         <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h8A2.5 2.5 0 0 1 17 6.5v2.17l3.21-1.93A.52.52 0 0 1 21 7.2v9.6a.52.52 0 0 1-.79.46L17 15.33v2.17a2.5 2.5 0 0 1-2.5 2.5h-8A2.5 2.5 0 0 1 4 17.5v-11Z" />
       </svg>
     </button>
-    <div class="menu" role="menu" hidden>
-      ${menuItems}
-    </div>
+    <div class="menu" role="menu" hidden></div>
+    ${notice ? `<p class="notice" role="status"></p>` : ""}
   `;
+
+  const noticeElement = shadow.querySelector<HTMLElement>(".notice");
+  if (noticeElement && notice) noticeElement.textContent = notice;
 
   const trigger = shadow.querySelector<HTMLButtonElement>(".trigger")!;
   const menu = shadow.querySelector<HTMLElement>(".menu")!;
+  choices.forEach((label) => {
+    const button = page.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.textContent = label;
+    menu.append(button);
+  });
   const menuButtons = shadow.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
 
   trigger.addEventListener("click", () => {
@@ -176,17 +198,30 @@ function insertControl(
 export function mountFullVideoControl(
   page: Document,
   options: FullVideoControlOptions = {},
-): RemoveFullVideoControl {
-  const { session } = options;
+): FullVideoControl {
+  let currentSession = options.session;
 
   // When a session is explicitly provided (not undefined) and it is inactive
   // or null, do not mount the control at all.
-  if (session !== undefined && (!session || !session.active)) {
+  if (currentSession !== undefined && (!currentSession || !currentSession.active)) {
     const observer = new MutationObserver(() => {});
     observer.observe(page.documentElement, { childList: true, subtree: true });
-    return () => {
+    let activeControl: FullVideoControl | undefined;
+    const remove = () => {
       observer.disconnect();
+      activeControl?.();
     };
+    return Object.assign(remove, {
+      updateSession(nextSession: PublicMulticamSession) {
+        if (activeControl) {
+          activeControl.updateSession(nextSession);
+          return;
+        }
+        if (!nextSession.active) return;
+        observer.disconnect();
+        activeControl = mountFullVideoControl(page, { ...options, session: nextSession });
+      },
+    });
   }
 
   // Determine the choice set and origin map based on whether we have an active
@@ -195,10 +230,11 @@ export function mountFullVideoControl(
   let choices: string[];
   let initialChoice: string;
 
-  if (session && session.active) {
-    origins = buildSessionOrigins(session);
-    choices = [...session.cameras.map((c) => c.label), SHOW_GRID];
-    const mainCamera = session.cameras.find((c) => c.slot === session.mainSlot);
+  if (currentSession && currentSession.active) {
+    origins = buildSessionOrigins(currentSession);
+    choices = [...currentSession.cameras.map((c) => c.label), SHOW_GRID];
+    const mainSlot = currentSession.mainSlot;
+    const mainCamera = currentSession.cameras.find((c) => c.slot === mainSlot);
     initialChoice = mainCamera?.label ?? SHOW_GRID;
   } else {
     // Legacy mode: hardcoded quadrant names
@@ -207,9 +243,11 @@ export function mountFullVideoControl(
     initialChoice = ALL_SCREEN;
   }
 
-  const gridLabel = session?.active ? SHOW_GRID : ALL_SCREEN;
+  let gridLabel = currentSession?.active ? SHOW_GRID : ALL_SCREEN;
 
   let selectedChoice = initialChoice;
+  let selectedSlot: ActiveMulticamSession["mainSlot"] | "grid" | undefined =
+    currentSession?.active ? currentSession.mainSlot : undefined;
   let advertisementWasPlaying = Boolean(
     page.querySelector(ADVERTISEMENT_SELECTOR),
   );
@@ -217,10 +255,17 @@ export function mountFullVideoControl(
 
   const onChoice = (choice: string) => {
     selectedChoice = choice;
+    if (currentSession?.active) {
+      selectedSlot =
+        choice === SHOW_GRID
+          ? "grid"
+          : currentSession.cameras.find((camera) => camera.label === choice)?.slot;
+    }
     selectVideoChoice(page, choice, origins, gridLabel);
   };
 
   let host = insertControl(page, { choices, onChoice });
+  let noticeTimer: number | undefined;
 
   // Apply the initial main-camera crop immediately.
   if (host) {
@@ -255,11 +300,59 @@ export function mountFullVideoControl(
 
   observer.observe(page.documentElement, { childList: true, subtree: true });
 
-  return () => {
+  const remove = () => {
     observer.disconnect();
+    if (noticeTimer !== undefined) page.defaultView?.clearTimeout(noticeTimer);
     host?.remove();
     page
       .querySelectorAll<HTMLVideoElement>("video")
       .forEach(restoreVideoStyles);
   };
+
+  return Object.assign(remove, {
+    updateSession(nextSession: PublicMulticamSession) {
+      currentSession = nextSession;
+      host?.remove();
+      host = undefined;
+      if (!nextSession.active) {
+        page
+          .querySelectorAll<HTMLVideoElement>("video")
+          .forEach(restoreVideoStyles);
+        return;
+      }
+
+      origins = buildSessionOrigins(nextSession);
+      choices = [...nextSession.cameras.map((camera) => camera.label), SHOW_GRID];
+      gridLabel = SHOW_GRID;
+      const selectedCamera = nextSession.cameras.find(
+        (camera) => camera.slot === selectedSlot,
+      );
+      let notice: string | undefined;
+      if (selectedSlot === "grid") {
+        selectedChoice = SHOW_GRID;
+      } else if (selectedCamera) {
+        selectedChoice = selectedCamera.label;
+      } else {
+        selectedSlot = nextSession.mainSlot;
+        selectedChoice =
+          nextSession.cameras.find(
+            (camera) => camera.slot === nextSession.mainSlot,
+          )?.label ?? SHOW_GRID;
+        notice = `That camera is no longer live. Switched to ${selectedChoice}.`;
+      }
+      host = insertControl(page, {
+        choices,
+        ...(notice ? { notice } : {}),
+        onChoice,
+      });
+      if (notice) {
+        if (noticeTimer !== undefined) page.defaultView?.clearTimeout(noticeTimer);
+        noticeTimer = page.defaultView?.setTimeout(() => {
+          host?.shadowRoot?.querySelector(".notice")?.remove();
+          noticeTimer = undefined;
+        }, 4_000);
+      }
+      selectVideoChoice(page, selectedChoice, origins, gridLabel);
+    },
+  });
 }

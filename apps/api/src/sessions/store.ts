@@ -11,6 +11,17 @@ import postgres from "postgres";
 import { activeMulticamSessions } from "./schema.ts";
 
 export interface MulticamSessionStore {
+  disable(broadcasterId: string): Promise<void>;
+  findByBroadcasterId(
+    broadcasterId: string,
+  ): Promise<
+    | {
+        broadcasterId: string;
+        snapshot: ActiveMulticamSession;
+        streamId: string | null;
+      }
+    | undefined
+  >;
   findByChannelLogin(
     channelLogin: string,
   ): Promise<
@@ -27,12 +38,34 @@ export interface MulticamSessionStore {
     snapshot: ActiveMulticamSession;
     streamId: string;
   }): Promise<ActiveMulticamSession>;
+  publishDraft(input: {
+    broadcasterId: string;
+    cameras: ActiveMulticamSession["cameras"];
+    mainSlot: ActiveMulticamSession["mainSlot"];
+  }): Promise<ActiveMulticamSession | undefined>;
 }
 
 function sessionStoreFromDatabase(
   database: PgliteDatabase,
 ): MulticamSessionStore {
   return {
+    async disable(broadcasterId) {
+      await database
+        .delete(activeMulticamSessions)
+        .where(eq(activeMulticamSessions.broadcasterId, broadcasterId));
+    },
+    async findByBroadcasterId(broadcasterId) {
+      const [session] = await database
+        .select({
+          broadcasterId: activeMulticamSessions.broadcasterId,
+          snapshot: activeMulticamSessions.snapshot,
+          streamId: activeMulticamSessions.streamId,
+        })
+        .from(activeMulticamSessions)
+        .where(eq(activeMulticamSessions.broadcasterId, broadcasterId))
+        .limit(1);
+      return session;
+    },
     async findByChannelLogin(channelLogin) {
       const [session] = await database
         .select({
@@ -60,6 +93,29 @@ function sessionStoreFromDatabase(
         .returning({ snapshot: activeMulticamSessions.snapshot });
       if (!session) throw new Error("Session publication returned no row");
       return session.snapshot;
+    },
+    async publishDraft(input) {
+      return database.transaction(async (transaction) => {
+        const [current] = await transaction
+          .select({ snapshot: activeMulticamSessions.snapshot })
+          .from(activeMulticamSessions)
+          .where(eq(activeMulticamSessions.broadcasterId, input.broadcasterId))
+          .limit(1)
+          .for("update");
+        if (!current) return undefined;
+        const snapshot = {
+          ...current.snapshot,
+          cameras: input.cameras,
+          mainSlot: input.mainSlot,
+          revision: current.snapshot.revision + 1,
+        };
+        const [published] = await transaction
+          .update(activeMulticamSessions)
+          .set({ snapshot })
+          .where(eq(activeMulticamSessions.broadcasterId, input.broadcasterId))
+          .returning({ snapshot: activeMulticamSessions.snapshot });
+        return published?.snapshot;
+      });
     },
   };
 }
@@ -79,6 +135,23 @@ export function createPostgresMulticamSessionStore(
 ): MulticamSessionStore {
   const database = drizzlePostgres(postgres(connectionString));
   return {
+    async disable(broadcasterId) {
+      await database
+        .delete(activeMulticamSessions)
+        .where(eq(activeMulticamSessions.broadcasterId, broadcasterId));
+    },
+    async findByBroadcasterId(broadcasterId) {
+      const [session] = await database
+        .select({
+          broadcasterId: activeMulticamSessions.broadcasterId,
+          snapshot: activeMulticamSessions.snapshot,
+          streamId: activeMulticamSessions.streamId,
+        })
+        .from(activeMulticamSessions)
+        .where(eq(activeMulticamSessions.broadcasterId, broadcasterId))
+        .limit(1);
+      return session;
+    },
     async findByChannelLogin(channelLogin) {
       const [session] = await database
         .select({
@@ -106,6 +179,29 @@ export function createPostgresMulticamSessionStore(
         .returning({ snapshot: activeMulticamSessions.snapshot });
       if (!session) throw new Error("Session publication returned no row");
       return session.snapshot;
+    },
+    async publishDraft(input) {
+      return database.transaction(async (transaction) => {
+        const [current] = await transaction
+          .select({ snapshot: activeMulticamSessions.snapshot })
+          .from(activeMulticamSessions)
+          .where(eq(activeMulticamSessions.broadcasterId, input.broadcasterId))
+          .limit(1)
+          .for("update");
+        if (!current) return undefined;
+        const snapshot = {
+          ...current.snapshot,
+          cameras: input.cameras,
+          mainSlot: input.mainSlot,
+          revision: current.snapshot.revision + 1,
+        };
+        const [published] = await transaction
+          .update(activeMulticamSessions)
+          .set({ snapshot })
+          .where(eq(activeMulticamSessions.broadcasterId, input.broadcasterId))
+          .returning({ snapshot: activeMulticamSessions.snapshot });
+        return published?.snapshot;
+      });
     },
   };
 }

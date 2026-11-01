@@ -147,3 +147,14 @@ export type ActiveMulticamSession = z.infer<
 export type PublicMulticamSession = z.infer<
   typeof publicMulticamSessionSchema
 >;
+
+export const ownerMulticamStatusSchema = z.discriminatedUnion("active", [
+  inactiveMulticamSessionSchema,
+  z.object({
+    active: z.literal(true),
+    hasUnpublishedChanges: z.boolean(),
+    live: activeMulticamSessionSchema,
+  }),
+]);
+
+export type OwnerMulticamStatus = z.infer<typeof ownerMulticamStatusSchema>;

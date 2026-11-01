@@ -116,6 +116,173 @@ const preferences = {
 };
 
 describe("published Multicam sessions", () => {
+  it("keeps preference edits as an unpublished draft", async () => {
+    const testApi = await startTestApi();
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify({
+        ...preferences,
+        mainSlot: "topLeft",
+        slots: preferences.slots.map((camera) =>
+          camera.slot === "topLeft" ? { ...camera, label: "Presenter" } : camera,
+        ),
+      }),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+
+    const ownerStatus = await fetch(`${testApi.baseUrl}/api/multicam`, {
+      headers: { Cookie: sessionCookie },
+    });
+
+    expect(ownerStatus.status).toBe(200);
+    expect(await ownerStatus.json()).toMatchObject({
+      active: true,
+      hasUnpublishedChanges: true,
+      live: {
+        mainSlot: "topRight",
+        revision: 1,
+      },
+    });
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+    expect(await publicLookup.json()).toMatchObject({
+      cameras: expect.arrayContaining([
+        { label: "Host", slot: "topLeft" },
+      ]),
+      mainSlot: "topRight",
+      revision: 1,
+    });
+  });
+
+  it("publishes the complete draft as one new revision", async () => {
+    const testApi = await startTestApi();
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+    const draft = {
+      mainSlot: "topLeft",
+      slots: preferences.slots.map((camera) =>
+        camera.slot === "topLeft" ? { ...camera, label: "Presenter" } : camera,
+      ),
+    };
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(draft),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+
+    const published = await fetch(`${testApi.baseUrl}/api/multicam/publish`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    expect(published.status).toBe(200);
+    expect(await published.json()).toMatchObject({
+      active: true,
+      cameras: expect.arrayContaining([
+        { label: "Presenter", slot: "topLeft" },
+      ]),
+      mainSlot: "topLeft",
+      revision: 2,
+    });
+    const ownerStatus = await fetch(`${testApi.baseUrl}/api/multicam`, {
+      headers: { Cookie: sessionCookie },
+    });
+    expect(await ownerStatus.json()).toMatchObject({
+      active: true,
+      hasUnpublishedChanges: false,
+      live: { mainSlot: "topLeft", revision: 2 },
+    });
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+    expect(await publicLookup.json()).toMatchObject({
+      cameras: expect.arrayContaining([
+        { label: "Presenter", slot: "topLeft" },
+      ]),
+      mainSlot: "topLeft",
+      revision: 2,
+    });
+  });
+
+  it("rejects publication when the saved preferences match live", async () => {
+    const testApi = await startTestApi();
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    const published = await fetch(`${testApi.baseUrl}/api/multicam/publish`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    expect(published.status).toBe(409);
+    expect(await published.json()).toEqual({
+      code: "NO_UNPUBLISHED_CHANGES",
+      message: "The live configuration already matches saved preferences.",
+    });
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+    expect(await publicLookup.json()).toMatchObject({ revision: 1 });
+  });
+
+  it("disables the active session without deleting saved preferences", async () => {
+    const testApi = await startTestApi();
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    const disabled = await fetch(`${testApi.baseUrl}/api/multicam`, {
+      headers: { Cookie: sessionCookie },
+      method: "DELETE",
+    });
+
+    expect(disabled.status).toBe(200);
+    expect(await disabled.json()).toEqual({ active: false });
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+    expect(await publicLookup.json()).toEqual({ active: false });
+    const saved = await fetch(`${testApi.baseUrl}/api/preferences`, {
+      headers: { Cookie: sessionCookie },
+    });
+    expect(await saved.json()).toEqual(preferences);
+  });
+
   it("rejects activation while the authenticated broadcaster is offline", async () => {
     const testApi = await startTestApi(null);
     const sessionCookie = await signIn(testApi.baseUrl);

@@ -4,16 +4,17 @@ import { fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type FullVideoControl,
   type FullVideoControlOptions,
   mountFullVideoControl,
 } from "./full-video-control.ts";
 
-const removeMountedControls: Array<() => void> = [];
+const removeMountedControls: FullVideoControl[] = [];
 
 function mountControl(
   page: Document,
   options?: FullVideoControlOptions,
-): () => void {
+): FullVideoControl {
   const removeControl = mountFullVideoControl(page, options);
   removeMountedControls.push(removeControl);
   return removeControl;
@@ -515,6 +516,74 @@ describe("Twitch full-video control with published session", () => {
     expect(video.style.transformOrigin).toBe("top left");
   });
 
+  it("keeps a selected camera when it remains active in a new revision", () => {
+    const { settings, video } = setupPlayer();
+    const controlApi = mountControl(document, { session: activeSession });
+    let control = settings.previousElementSibling as HTMLElement;
+    let ui = within(control.shadowRoot as unknown as HTMLElement);
+    fireEvent.click(ui.getByRole("button", { name: "Multicam video options" }));
+    fireEvent.click(ui.getByRole("menuitem", { name: "Host" }));
+
+    controlApi.updateSession({
+      ...activeSession,
+      cameras: [
+        { label: "Presenter", slot: "topLeft" },
+        { label: "Close-up", slot: "topRight" },
+        { label: "Wide", slot: "bottomRight" },
+      ],
+      mainSlot: "bottomRight",
+      revision: 2,
+    });
+
+    control = settings.previousElementSibling as HTMLElement;
+    ui = within(control.shadowRoot as unknown as HTMLElement);
+    fireEvent.click(ui.getByRole("button", { name: "Multicam video options" }));
+    expect(ui.getByRole("menuitem", { name: "Presenter" })).toBeTruthy();
+    expect(video.style.transform).toBe("scale(2)");
+    expect(video.style.transformOrigin).toBe("top left");
+  });
+
+  it("moves an unavailable selection to the new main camera with a notice", () => {
+    const { settings, video } = setupPlayer();
+    const controlApi = mountControl(document, { session: activeSession });
+    let control = settings.previousElementSibling as HTMLElement;
+    let ui = within(control.shadowRoot as unknown as HTMLElement);
+    fireEvent.click(ui.getByRole("button", { name: "Multicam video options" }));
+    fireEvent.click(ui.getByRole("menuitem", { name: "Host" }));
+
+    controlApi.updateSession({
+      ...activeSession,
+      cameras: [
+        { label: "Close-up", slot: "topRight" },
+        { label: "Wide", slot: "bottomRight" },
+      ],
+      mainSlot: "topRight",
+      revision: 2,
+    });
+
+    control = settings.previousElementSibling as HTMLElement;
+    ui = within(control.shadowRoot as unknown as HTMLElement);
+    expect(video.style.transform).toBe("scale(2)");
+    expect(video.style.transformOrigin).toBe("top right");
+    expect(ui.getByRole("status").textContent).toBe(
+      "That camera is no longer live. Switched to Close-up.",
+    );
+  });
+
+  it("removes viewer controls and transforms when Multicam is disabled", () => {
+    const { settings, video } = setupPlayer();
+    const controlApi = mountControl(document, { session: activeSession });
+    expect(video.style.transform).toBe("scale(2)");
+
+    controlApi.updateSession({ active: false });
+
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeNull();
+    expect(video.style.transform).toBe("");
+    expect(video.style.transformOrigin).toBe("");
+  });
+
   it("does not mount the control when session is inactive", () => {
     const { settings } = setupPlayer();
 
@@ -523,6 +592,23 @@ describe("Twitch full-video control with published session", () => {
     // No control should have been inserted before settings
     const previous = settings.previousElementSibling as HTMLElement | null;
     expect(previous?.dataset?.multicamFullVideoControl).toBeUndefined();
+  });
+
+  it("starts and later removes controls as polling changes session activity", () => {
+    const { video } = setupPlayer();
+    const controlApi = mountControl(document, { session: { active: false } });
+
+    controlApi.updateSession(activeSession);
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeTruthy();
+    expect(video.style.transformOrigin).toBe("top right");
+
+    controlApi.updateSession({ active: false });
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeNull();
+    expect(video.style.transform).toBe("");
   });
 
   it("does not mount the control when session is absent", () => {

@@ -20,6 +20,10 @@ function stubSessionStore(
   sessions: Record<string, unknown> = {},
 ): MulticamSessionStore {
   return {
+    async disable() {},
+    async findByBroadcasterId() {
+      return undefined;
+    },
     async findByChannelLogin(login) {
       const raw = sessions[login];
       if (raw === undefined) return undefined;
@@ -31,6 +35,9 @@ function stubSessionStore(
     },
     async publish(input) {
       return input.snapshot;
+    },
+    async publishDraft() {
+      return undefined;
     },
   };
 }

@@ -1,13 +1,16 @@
 import {
   apiErrorResponseSchema,
+  activeMulticamSessionSchema,
   dashboardSessionResponseSchema,
   healthResponseSchema,
+  ownerMulticamStatusSchema,
   streamerPreferencesSchema,
   type ApiErrorResponse,
   type DashboardSessionResponse,
+  type OwnerMulticamStatus,
   type StreamerPreferences,
 } from "@multicam/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type ApiStatus = "checking" | "connected" | "unavailable";
 type AuthStatus = "checking" | "anonymous" | "authenticated" | "unavailable";
@@ -29,6 +32,9 @@ export function App() {
   const [streamer, setStreamer] =
     useState<DashboardSessionResponse["streamer"]>();
   const [preferences, setPreferences] = useState<StreamerPreferences>();
+  const [multicamStatus, setMulticamStatus] =
+    useState<OwnerMulticamStatus>();
+  const lastSavedPreferences = useRef<string | undefined>(undefined);
   const [saveStatus, setSaveStatus] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
@@ -52,12 +58,14 @@ export function App() {
     setFieldIssues([]);
   };
 
-  const savePreferences = async () => {
-    if (!preferences) return;
+  const savePreferences = async (
+    nextPreferences = preferences,
+  ) => {
+    if (!nextPreferences) return;
     setSaveStatus("saving");
     try {
       const response = await fetch("/api/preferences", {
-        body: JSON.stringify(preferences),
+        body: JSON.stringify(nextPreferences),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       });
@@ -67,14 +75,53 @@ export function App() {
         setSaveStatus("error");
         return;
       }
-      setPreferences(
-        streamerPreferencesSchema.parse(await response.json()),
-      );
+      const saved = streamerPreferencesSchema.parse(await response.json());
+      lastSavedPreferences.current = JSON.stringify(saved);
+      setPreferences(saved);
       setSaveStatus("saved");
       setFieldIssues([]);
+      try {
+        const multicamResponse = await fetch("/api/multicam");
+        if (multicamResponse.ok) {
+          setMulticamStatus(
+            ownerMulticamStatusSchema.parse(await multicamResponse.json()),
+          );
+        }
+      } catch {
+        // Saving the draft succeeded even if live status cannot be refreshed.
+      }
     } catch {
       setSaveStatus("error");
     }
+  };
+
+  useEffect(() => {
+    if (!preferences) return;
+    const serialized = JSON.stringify(preferences);
+    if (serialized === lastSavedPreferences.current) return;
+    const timer = window.setTimeout(() => {
+      void savePreferences(preferences);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [preferences]);
+
+  const publishPreferences = async () => {
+    const response = await fetch("/api/multicam/publish", { method: "POST" });
+    if (!response.ok) return;
+    const live = activeMulticamSessionSchema.parse(await response.json());
+    setMulticamStatus({
+      active: true,
+      hasUnpublishedChanges: false,
+      live,
+    });
+  };
+
+  const disableMulticam = async () => {
+    const response = await fetch("/api/multicam", { method: "DELETE" });
+    if (!response.ok) return;
+    setMulticamStatus(
+      ownerMulticamStatusSchema.parse(await response.json()),
+    );
   };
 
   useEffect(() => {
@@ -109,13 +156,19 @@ export function App() {
         try {
           const preferencesResponse = await fetch("/api/preferences");
           if (preferencesResponse.ok) {
-            setPreferences(
-              streamerPreferencesSchema.parse(
-                await preferencesResponse.json(),
-              ),
+            const savedPreferences = streamerPreferencesSchema.parse(
+              await preferencesResponse.json(),
             );
+            lastSavedPreferences.current = JSON.stringify(savedPreferences);
+            setPreferences(savedPreferences);
           } else if (preferencesResponse.status === 404) {
             setPreferences(newStreamerPreferences);
+          }
+          const multicamResponse = await fetch("/api/multicam");
+          if (multicamResponse.ok) {
+            setMulticamStatus(
+              ownerMulticamStatusSchema.parse(await multicamResponse.json()),
+            );
           }
         } catch {
           // Authentication remains usable if preferences cannot be loaded.
@@ -155,6 +208,39 @@ export function App() {
         {authStatus === "authenticated" && streamer && (
           <>
             <p>Signed in as {streamer.login}</p>
+            {multicamStatus?.active && (
+              <section className="mt-8 rounded-2xl border border-violet-400/30 bg-slate-950 p-5">
+                <h2 className="text-xl font-semibold">Live configuration</h2>
+                <p>Live revision {multicamStatus.live.revision}</p>
+                <p>
+                  {multicamStatus.hasUnpublishedChanges
+                    ? "Unpublished preference changes"
+                    : "No unpublished changes"}
+                </p>
+                <div className="mt-4 flex gap-3">
+                  <button
+                    className="rounded-lg bg-violet-500 px-4 py-2 font-semibold disabled:opacity-50"
+                    disabled={!multicamStatus.hasUnpublishedChanges}
+                    onClick={() => void publishPreferences()}
+                    type="button"
+                  >
+                    Update Live Configuration
+                  </button>
+                  <button
+                    className="rounded-lg border border-rose-400 px-4 py-2 font-semibold text-rose-200"
+                    onClick={() => void disableMulticam()}
+                    type="button"
+                  >
+                    Disable Multicam
+                  </button>
+                </div>
+              </section>
+            )}
+            {multicamStatus && !multicamStatus.active && (
+              <p className="mt-8 rounded-2xl border border-slate-700 bg-slate-950 p-5">
+                Multicam is inactive
+              </p>
+            )}
             {preferences && (
               <form
                 className="mt-8 grid grid-cols-2 gap-4"

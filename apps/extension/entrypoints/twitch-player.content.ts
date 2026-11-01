@@ -35,7 +35,45 @@ export default defineContentScript({
 
     if (context.isInvalid) return;
 
-    const removeControl = mountFullVideoControl(document, { session });
-    context.onInvalidated(removeControl);
+    const control = mountFullVideoControl(document, { session });
+    let currentSession = session;
+    let refreshing = false;
+
+    const refreshSession = async () => {
+      if (document.hidden || refreshing || context.isInvalid) return;
+      refreshing = true;
+      const refreshed = await fetchSession(login);
+      refreshing = false;
+      if (context.isInvalid) return;
+      const nextSession = refreshed ?? { active: false as const };
+      const currentRevision = currentSession?.active
+        ? currentSession.revision
+        : undefined;
+      const nextRevision = nextSession.active ? nextSession.revision : undefined;
+      if (
+        currentSession?.active === nextSession.active &&
+        currentRevision === nextRevision
+      ) {
+        return;
+      }
+      currentSession = nextSession;
+      control.updateSession(nextSession);
+    };
+
+    const refreshInterval = window.setInterval(() => {
+      void refreshSession();
+    }, 5_000);
+    const refreshWhenVisible = () => {
+      if (!document.hidden) void refreshSession();
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
+
+    context.onInvalidated(() => {
+      window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
+      control();
+    });
   },
 });

@@ -18,6 +18,170 @@ afterEach(() => {
 });
 
 describe("Multicam dashboard", () => {
+  it("distinguishes the live revision from saved preferences and prevents no-op updates", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (input.toString() === "/api/auth/session") {
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              streamer: {
+                login: "camera_captain",
+                twitchUserId: "141981764",
+              },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (input.toString() === "/api/preferences") {
+          return new Response(
+            JSON.stringify({
+              mainSlot: "topLeft",
+              slots: [
+                { active: true, label: "Host", slot: "topLeft" },
+                { active: true, label: "Guest", slot: "topRight" },
+                { active: false, label: "", slot: "bottomLeft" },
+                { active: false, label: "", slot: "bottomRight" },
+              ],
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (
+          input.toString() === "/api/multicam" &&
+          init?.method === "DELETE"
+        ) {
+          return new Response(JSON.stringify({ active: false }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (input.toString() === "/api/multicam") {
+          return new Response(
+            JSON.stringify({
+              active: true,
+              hasUnpublishedChanges: false,
+              live: {
+                active: true,
+                cameras: [
+                  { label: "Host", slot: "topLeft" },
+                  { label: "Guest", slot: "topRight" },
+                ],
+                expiresAt: "2099-01-01T00:00:00.000Z",
+                layout: "2x2",
+                mainSlot: "topLeft",
+                protocolVersion: 1,
+                revision: 3,
+              },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ status: "ok" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Live revision 3")).toBeTruthy();
+    expect(screen.getByText("No unpublished changes")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", {
+        name: "Update Live Configuration",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", {
+        name: "Disable Multicam",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Disable Multicam" }));
+    expect(await screen.findByText("Multicam is inactive")).toBeTruthy();
+  });
+
+  it("publishes saved draft preferences from the live configuration panel", async () => {
+    const live = {
+      active: true as const,
+      cameras: [
+        { label: "Host", slot: "topLeft" },
+        { label: "Guest", slot: "topRight" },
+      ],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      layout: "2x2",
+      mainSlot: "topLeft",
+      protocolVersion: 1,
+      revision: 3,
+    };
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (input.toString() === "/api/auth/session") {
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              streamer: { login: "camera_captain", twitchUserId: "141981764" },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (input.toString() === "/api/preferences") {
+          return new Response(
+            JSON.stringify({
+              mainSlot: "topLeft",
+              slots: [
+                { active: true, label: "Host", slot: "topLeft" },
+                { active: true, label: "Guest", slot: "topRight" },
+                { active: false, label: "", slot: "bottomLeft" },
+                { active: false, label: "", slot: "bottomRight" },
+              ],
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (
+          input.toString() === "/api/multicam/publish" &&
+          init?.method === "POST"
+        ) {
+          return new Response(JSON.stringify({ ...live, revision: 4 }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (input.toString() === "/api/multicam") {
+          return new Response(
+            JSON.stringify({
+              active: true,
+              hasUnpublishedChanges: true,
+              live,
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ status: "ok" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Update Live Configuration",
+      }),
+    );
+
+    expect(await screen.findByText("Live revision 4")).toBeTruthy();
+    expect(screen.getByText("No unpublished changes")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledWith("/api/multicam/publish", {
+      method: "POST",
+    });
+  });
+
   it("shows that it is connected to the Multicam API", async () => {
     vi.stubGlobal(
       "fetch",
@@ -168,7 +332,7 @@ describe("Multicam dashboard", () => {
     expect(document.querySelector("img")).toBeNull();
   });
 
-  it("edits and saves active cameras, labels, and the main camera", async () => {
+  it("autosaves active cameras, labels, and the main camera as a draft", async () => {
     let savedBody: unknown;
     vi.stubGlobal(
       "fetch",
@@ -222,8 +386,6 @@ describe("Multicam dashboard", () => {
       target: { value: "Side view" },
     });
     fireEvent.click(within(bottomLeft).getByRole("radio"));
-    fireEvent.click(screen.getByRole("button", { name: "Save preferences" }));
-
     await waitFor(() => {
       expect(savedBody).toEqual({
         mainSlot: "bottomLeft",

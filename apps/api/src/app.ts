@@ -60,7 +60,10 @@ export function createApi(
           preferenceStore,
           sessionDependencies,
         );
+        api.get("/api/multicam", sessions.status);
+        api.delete("/api/multicam", sessions.disable);
         api.post("/api/multicam/enable", sessions.enable);
+        api.post("/api/multicam/publish", sessions.publish);
       }
     }
   }
