@@ -9,11 +9,17 @@ export type FullVideoControl = (() => void) & {
 export type RemoveFullVideoControl = FullVideoControl;
 export type FullVideoControlOptions = {
   isMulticamStateValid?: () => boolean;
+  reportUnsupported?: (reason: PlayerIntegrationUnsupportedReason) => void;
   /** Published session from the Multicam API. When absent or inactive the
    *  control falls back to the legacy hardcoded quadrant menu. When explicitly
    *  set to null or an inactive session, the control is not mounted at all. */
   session?: PublicMulticamSession | null;
 };
+export type PlayerIntegrationUnsupportedReason =
+  | "missing-settings-anchor"
+  | "ambiguous-settings-anchor"
+  | "missing-video"
+  | "ambiguous-video";
 
 const SETTINGS_SELECTOR = '[data-a-target="player-settings-button"]';
 const ADVERTISEMENT_SELECTOR = '[data-a-target="video-ad-label"]';
@@ -41,6 +47,63 @@ const originalVideoStyles = new WeakMap<
   HTMLVideoElement,
   { transform: string; transformOrigin: string }
 >();
+const controlCleanups = new WeakMap<HTMLElement, () => void>();
+
+function removeControlHost(host: HTMLElement | undefined): void {
+  if (!host) return;
+  controlCleanups.get(host)?.();
+  controlCleanups.delete(host);
+  host.remove();
+}
+
+function isPotentiallyVisible(element: HTMLElement): boolean {
+  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+  return (
+    !element.hidden &&
+    element.getAttribute("aria-hidden") !== "true" &&
+    style?.display !== "none" &&
+    style?.visibility !== "hidden"
+  );
+}
+
+function findSettingsAnchor(page: Document): {
+  element?: HTMLElement;
+  reason?: PlayerIntegrationUnsupportedReason;
+} {
+  const candidates = [
+    ...page.querySelectorAll<HTMLElement>(SETTINGS_SELECTOR),
+  ].filter(isPotentiallyVisible);
+  if (candidates.length === 0) return { reason: "missing-settings-anchor" };
+  if (candidates.length === 1) return { element: candidates[0]! };
+  const rendered = candidates.filter((candidate) => {
+    const bounds = candidate.getBoundingClientRect();
+    return bounds.width > 0 && bounds.height > 0;
+  });
+  if (rendered.length === 1) return { element: rendered[0]! };
+  return { reason: "ambiguous-settings-anchor" };
+}
+
+function findPlayerVideo(
+  page: Document,
+  settings = findSettingsAnchor(page).element,
+): {
+  element?: HTMLVideoElement;
+  reason?: PlayerIntegrationUnsupportedReason;
+} {
+  if (!settings) return {};
+  const scope = settings.closest('[data-a-target="video-player"]') ?? page;
+  const candidates = [
+    ...scope.querySelectorAll<HTMLVideoElement>("video"),
+  ].filter(isPotentiallyVisible);
+  if (candidates.length === 0) return { reason: "missing-video" };
+  if (candidates.length === 1) return { element: candidates[0]! };
+  const rendered = candidates.filter((candidate) => {
+    const bounds = candidate.getBoundingClientRect();
+    return bounds.width > 0 && bounds.height > 0;
+  });
+  if (rendered.length === 1) return { element: rendered[0]! };
+  return { reason: "ambiguous-video" };
+}
 
 function rememberVideoStyles(video: HTMLVideoElement): void {
   if (originalVideoStyles.has(video)) return;
@@ -75,9 +138,9 @@ function selectVideoChoice(
   choice: string,
   origins: Map<string, string>,
   gridLabel: string,
-): void {
-  const video = page.querySelector<HTMLVideoElement>("video");
-  if (!video) return;
+): HTMLVideoElement | undefined {
+  const video = findPlayerVideo(page).element;
+  if (!video) return undefined;
 
   const origin = origins.get(choice);
   if (origin) {
@@ -87,6 +150,7 @@ function selectVideoChoice(
   } else if (choice === gridLabel) {
     restoreVideoStyles(video);
   }
+  return video;
 }
 
 type InsertControlOptions = {
@@ -99,8 +163,9 @@ function insertControl(
   page: Document,
   { choices, notice, onChoice = () => {} }: InsertControlOptions,
 ): HTMLElement | undefined {
-  const settings = page.querySelector<HTMLElement>(SETTINGS_SELECTOR);
+  const settings = findSettingsAnchor(page).element;
   if (!settings) return undefined;
+  if (!findPlayerVideo(page, settings).element) return undefined;
 
   const host = page.createElement("span");
   host.dataset.multicamFullVideoControl = "";
@@ -179,16 +244,68 @@ function insertControl(
   });
   const menuButtons = shadow.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
 
+  const closeMenu = (restoreFocus = true) => {
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  };
+  const openMenu = (focusIndex = 0) => {
+    menu.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    menuButtons.item(focusIndex).focus();
+  };
+
   trigger.addEventListener("click", () => {
-    menu.hidden = !menu.hidden;
-    trigger.setAttribute("aria-expanded", String(!menu.hidden));
+    if (menu.hidden) openMenu();
+    else closeMenu();
+  });
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "Home") {
+      event.preventDefault();
+      openMenu();
+    } else if (event.key === "ArrowUp" || event.key === "End") {
+      event.preventDefault();
+      openMenu(menuButtons.length - 1);
+    } else if (event.key === "Escape") {
+      closeMenu();
+    }
+  });
+  menu.addEventListener("keydown", (event) => {
+    const currentIndex = [...menuButtons].indexOf(
+      shadow.activeElement as HTMLButtonElement,
+    );
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMenu();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      menuButtons.item((currentIndex + 1) % menuButtons.length).focus();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      menuButtons
+        .item((currentIndex - 1 + menuButtons.length) % menuButtons.length)
+        .focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      menuButtons.item(0).focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      menuButtons.item(menuButtons.length - 1).focus();
+    }
   });
   menuButtons.forEach((button) => {
     button.addEventListener("click", () => {
       onChoice(button.textContent ?? "");
-      menu.hidden = true;
-      trigger.setAttribute("aria-expanded", "false");
+      closeMenu();
     });
+  });
+
+  const closeOnOutsidePointer = (event: Event) => {
+    if (!event.composedPath().includes(host)) closeMenu(false);
+  };
+  page.addEventListener("pointerdown", closeOnOutsidePointer);
+  controlCleanups.set(host, () => {
+    page.removeEventListener("pointerdown", closeOnOutsidePointer);
   });
 
   settings.before(host);
@@ -248,10 +365,24 @@ export function mountFullVideoControl(
   let selectedChoice = initialChoice;
   let selectedSlot: ActiveMulticamSession["mainSlot"] | "grid" | undefined =
     currentSession?.active ? currentSession.mainSlot : undefined;
+  let unsupportedReason: PlayerIntegrationUnsupportedReason | undefined;
+  const reportUnsupported = (reason: PlayerIntegrationUnsupportedReason) => {
+    if (reason === unsupportedReason) return;
+    unsupportedReason = reason;
+    options.reportUnsupported?.(reason);
+  };
+  const initialSettings = findSettingsAnchor(page);
+  if (initialSettings.reason) {
+    reportUnsupported(initialSettings.reason);
+  } else {
+    const initialVideo = findPlayerVideo(page, initialSettings.element);
+    if (initialVideo.reason) reportUnsupported(initialVideo.reason);
+  }
   let advertisementWasPlaying = Boolean(
     page.querySelector(ADVERTISEMENT_SELECTOR),
   );
   let multicamIsSuspended = advertisementWasPlaying;
+  let activeVideo: HTMLVideoElement | undefined;
 
   const onChoice = (choice: string) => {
     selectedChoice = choice;
@@ -261,7 +392,30 @@ export function mountFullVideoControl(
           ? "grid"
           : currentSession.cameras.find((camera) => camera.label === choice)?.slot;
     }
-    selectVideoChoice(page, choice, origins, gridLabel);
+    activeVideo = selectVideoChoice(page, choice, origins, gridLabel);
+  };
+
+  const reapplyCurrentSelection = () => {
+    if (multicamIsSuspended) return;
+    activeVideo = selectVideoChoice(
+      page,
+      selectedChoice,
+      origins,
+      gridLabel,
+    );
+  };
+  const ResizeObserverConstructor = page.defaultView?.ResizeObserver;
+  const resizeObserver = ResizeObserverConstructor
+    ? new ResizeObserverConstructor(reapplyCurrentSelection)
+    : undefined;
+  let observedPlayer: Element | undefined;
+  const observePlayerSize = () => {
+    const nextPlayer =
+      activeVideo?.closest('[data-a-target="video-player"]') ?? activeVideo;
+    if (!resizeObserver || nextPlayer === observedPlayer) return;
+    resizeObserver.disconnect();
+    observedPlayer = nextPlayer;
+    if (nextPlayer) resizeObserver.observe(nextPlayer);
   };
 
   let host = insertControl(page, { choices, onChoice });
@@ -269,11 +423,38 @@ export function mountFullVideoControl(
 
   // Apply the initial main-camera crop immediately.
   if (host) {
-    selectVideoChoice(page, initialChoice, origins, gridLabel);
+    activeVideo = selectVideoChoice(page, initialChoice, origins, gridLabel);
     if (advertisementWasPlaying) host.hidden = true;
   }
+  observePlayerSize();
+  page.defaultView?.addEventListener("resize", reapplyCurrentSelection);
+  page.addEventListener("fullscreenchange", reapplyCurrentSelection);
 
   const observer = new MutationObserver(() => {
+    const settingsState = findSettingsAnchor(page);
+    const videoState = settingsState.element
+      ? findPlayerVideo(page, settingsState.element)
+      : {};
+    const nextUnsupportedReason = settingsState.reason ?? videoState.reason;
+    if (nextUnsupportedReason) {
+      reportUnsupported(nextUnsupportedReason);
+      if (activeVideo) restoreVideoStyles(activeVideo);
+      activeVideo = undefined;
+      observePlayerSize();
+      removeControlHost(host);
+      host = undefined;
+      return;
+    }
+    unsupportedReason = undefined;
+    if (currentSession && !currentSession.active) {
+      if (activeVideo) restoreVideoStyles(activeVideo);
+      activeVideo = videoState.element;
+      multicamIsSuspended = true;
+      removeControlHost(host);
+      host = undefined;
+      return;
+    }
+
     if (page.querySelector(ADVERTISEMENT_SELECTOR)) {
       page
         .querySelectorAll<HTMLVideoElement>("video")
@@ -287,12 +468,32 @@ export function mountFullVideoControl(
       const stateIsValid = options.isMulticamStateValid?.() ?? true;
       multicamIsSuspended = !stateIsValid;
       if (stateIsValid) {
-        selectVideoChoice(page, selectedChoice, origins, gridLabel);
+        activeVideo = selectVideoChoice(
+          page,
+          selectedChoice,
+          origins,
+          gridLabel,
+        );
         if (host) host.hidden = false;
       }
       advertisementWasPlaying = false;
     }
+    const discoveredVideo = videoState.element;
+    if (discoveredVideo !== activeVideo) {
+      if (activeVideo) restoreVideoStyles(activeVideo);
+      activeVideo = discoveredVideo;
+      if (activeVideo && !multicamIsSuspended) {
+        activeVideo = selectVideoChoice(
+          page,
+          selectedChoice,
+          origins,
+          gridLabel,
+        );
+      }
+      observePlayerSize();
+    }
     if (!host?.isConnected) {
+      removeControlHost(host);
       host = insertControl(page, { choices, onChoice });
       if (host && multicamIsSuspended) host.hidden = true;
     }
@@ -302,8 +503,12 @@ export function mountFullVideoControl(
 
   const remove = () => {
     observer.disconnect();
+    resizeObserver?.disconnect();
+    page.defaultView?.removeEventListener("resize", reapplyCurrentSelection);
+    page.removeEventListener("fullscreenchange", reapplyCurrentSelection);
     if (noticeTimer !== undefined) page.defaultView?.clearTimeout(noticeTimer);
-    host?.remove();
+    removeControlHost(host);
+    if (activeVideo) restoreVideoStyles(activeVideo);
     page
       .querySelectorAll<HTMLVideoElement>("video")
       .forEach(restoreVideoStyles);
@@ -312,14 +517,19 @@ export function mountFullVideoControl(
   return Object.assign(remove, {
     updateSession(nextSession: PublicMulticamSession) {
       currentSession = nextSession;
-      host?.remove();
+      removeControlHost(host);
       host = undefined;
       if (!nextSession.active) {
+        multicamIsSuspended = true;
         page
           .querySelectorAll<HTMLVideoElement>("video")
           .forEach(restoreVideoStyles);
         return;
       }
+
+      multicamIsSuspended = Boolean(
+        page.querySelector(ADVERTISEMENT_SELECTOR),
+      );
 
       origins = buildSessionOrigins(nextSession);
       choices = [...nextSession.cameras.map((camera) => camera.label), SHOW_GRID];
@@ -352,7 +562,13 @@ export function mountFullVideoControl(
           noticeTimer = undefined;
         }, 4_000);
       }
-      selectVideoChoice(page, selectedChoice, origins, gridLabel);
+      activeVideo = selectVideoChoice(
+        page,
+        selectedChoice,
+        origins,
+        gridLabel,
+      );
+      observePlayerSize();
     },
   });
 }

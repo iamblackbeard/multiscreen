@@ -22,6 +22,7 @@ function mountControl(
 
 afterEach(() => {
   removeMountedControls.splice(0).forEach((removeControl) => removeControl());
+  vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
 
@@ -428,6 +429,46 @@ describe("Twitch full-video control", () => {
       expect(control.dataset.multicamFullVideoControl).toBe("");
     });
   });
+
+  it("keeps exactly one working camera control through repeated control rebuilds", async () => {
+    document.body.innerHTML = `
+      <div data-a-target="video-player">
+        <video></video>
+        <div data-a-target="player-controls">
+          <button data-a-target="player-settings-button">Settings</button>
+        </div>
+      </div>
+    `;
+    const player = document.querySelector<HTMLElement>(
+      '[data-a-target="video-player"]',
+    )!;
+    mountControl(document);
+
+    for (let rebuild = 0; rebuild < 2; rebuild += 1) {
+      player.querySelector('[data-a-target="player-controls"]')?.remove();
+      player.insertAdjacentHTML(
+        "beforeend",
+        `<div data-a-target="player-controls">
+          <button data-a-target="player-settings-button">Settings</button>
+        </div>`,
+      );
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll("[data-multicam-full-video-control]"),
+        ).toHaveLength(1),
+      );
+    }
+
+    const control = document.querySelector<HTMLElement>(
+      "[data-multicam-full-video-control]",
+    )!;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    const trigger = ui.getByRole("button", { name: "Multicam video options" });
+    fireEvent.click(trigger);
+
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(ui.getAllByRole("menu")).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -516,6 +557,64 @@ describe("Twitch full-video control with published session", () => {
     expect(video.style.transformOrigin).toBe("top left");
   });
 
+  it("reapplies the current selection when Twitch replaces the active video", async () => {
+    const { settings, video } = setupPlayer();
+    mountControl(document, { session: activeSession });
+    const control = settings.previousElementSibling as HTMLElement;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    fireEvent.click(ui.getByRole("button", { name: "Multicam video options" }));
+    fireEvent.click(ui.getByRole("menuitem", { name: "Host" }));
+
+    const replacement = document.createElement("video");
+    video.replaceWith(replacement);
+
+    await waitFor(() => {
+      expect(replacement.style.transform).toBe("scale(2)");
+      expect(replacement.style.transformOrigin).toBe("top left");
+    });
+    expect(video.style.transform).toBe("");
+    expect(video.style.transformOrigin).toBe("");
+  });
+
+  it("retains the current crop through resize and fullscreen transitions", () => {
+    const { video } = setupPlayer();
+    mountControl(document, { session: activeSession });
+
+    video.style.transform = "";
+    video.style.transformOrigin = "";
+    window.dispatchEvent(new Event("resize"));
+    expect(video.style.transform).toBe("scale(2)");
+    expect(video.style.transformOrigin).toBe("top right");
+
+    video.style.transform = "";
+    video.style.transformOrigin = "";
+    document.dispatchEvent(new Event("fullscreenchange"));
+    expect(video.style.transform).toBe("scale(2)");
+    expect(video.style.transformOrigin).toBe("top right");
+  });
+
+  it("retains the current crop when the Twitch player itself resizes", () => {
+    let notifyResize = () => {};
+    class TestResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        notifyResize = () => callback([], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      observe() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const { video } = setupPlayer();
+    mountControl(document, { session: activeSession });
+
+    video.style.transform = "";
+    video.style.transformOrigin = "";
+    notifyResize();
+
+    expect(video.style.transform).toBe("scale(2)");
+    expect(video.style.transformOrigin).toBe("top right");
+  });
+
   it("keeps a selected camera when it remains active in a new revision", () => {
     const { settings, video } = setupPlayer();
     const controlApi = mountControl(document, { session: activeSession });
@@ -584,6 +683,22 @@ describe("Twitch full-video control with published session", () => {
     expect(video.style.transformOrigin).toBe("");
   });
 
+  it("does not resurrect stale controls after Multicam becomes inactive", async () => {
+    const { video } = setupPlayer();
+    const controlApi = mountControl(document, { session: activeSession });
+    controlApi.updateSession({ active: false });
+
+    document.body.append(document.createElement("div"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeNull();
+    expect(video.style.transform).toBe("");
+    expect(video.style.transformOrigin).toBe("");
+  });
+
   it("does not mount the control when session is inactive", () => {
     const { settings } = setupPlayer();
 
@@ -618,5 +733,162 @@ describe("Twitch full-video control with published session", () => {
 
     const previous = settings.previousElementSibling as HTMLElement | null;
     expect(previous?.dataset?.multicamFullVideoControl).toBeUndefined();
+  });
+
+  it("leaves Twitch unchanged and reports a missing settings anchor", () => {
+    document.body.innerHTML = `
+      <div data-a-target="video-player">
+        <video style="transform: rotate(1deg); transform-origin: center"></video>
+      </div>
+    `;
+    const video = document.querySelector<HTMLVideoElement>("video")!;
+    const reportUnsupported = vi.fn();
+
+    mountControl(document, { session: activeSession, reportUnsupported });
+
+    expect(reportUnsupported).toHaveBeenCalledWith("missing-settings-anchor");
+    expect(video.style.transform).toBe("rotate(1deg)");
+    expect(video.style.transformOrigin).toBe("center");
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeNull();
+  });
+
+  it("leaves Twitch unchanged when player anchors are ambiguous", () => {
+    document.body.innerHTML = `
+      <div data-a-target="video-player">
+        <video></video>
+        <button data-a-target="player-settings-button">Settings</button>
+      </div>
+      <div data-a-target="video-player">
+        <video></video>
+        <button data-a-target="player-settings-button">Settings</button>
+      </div>
+    `;
+    const reportUnsupported = vi.fn();
+
+    mountControl(document, { session: activeSession, reportUnsupported });
+
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      "ambiguous-settings-anchor",
+    );
+    expect(
+      [...document.querySelectorAll<HTMLVideoElement>("video")].map(
+        (video) => video.style.transform,
+      ),
+    ).toEqual(["", ""]);
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeNull();
+  });
+
+  it("does not add controls when the active video cannot be identified", () => {
+    document.body.innerHTML = `
+      <div data-a-target="video-player">
+        <button data-a-target="player-settings-button">Settings</button>
+      </div>
+    `;
+    const reportUnsupported = vi.fn();
+
+    mountControl(document, { session: activeSession, reportUnsupported });
+
+    expect(reportUnsupported).toHaveBeenCalledWith("missing-video");
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeNull();
+  });
+
+  it("does not guess between ambiguous player videos", () => {
+    document.body.innerHTML = `
+      <div data-a-target="video-player">
+        <video></video>
+        <video></video>
+        <button data-a-target="player-settings-button">Settings</button>
+      </div>
+    `;
+    const reportUnsupported = vi.fn();
+
+    mountControl(document, { session: activeSession, reportUnsupported });
+
+    expect(reportUnsupported).toHaveBeenCalledWith("ambiguous-video");
+    expect(
+      [...document.querySelectorAll<HTMLVideoElement>("video")].map(
+        (video) => video.style.transform,
+      ),
+    ).toEqual(["", ""]);
+    expect(
+      document.querySelector("[data-multicam-full-video-control]"),
+    ).toBeNull();
+  });
+
+  it("fails open when the active video disappears after mounting", async () => {
+    const { video } = setupPlayer();
+    const reportUnsupported = vi.fn();
+    mountControl(document, { session: activeSession, reportUnsupported });
+    expect(video.style.transform).toBe("scale(2)");
+
+    video.remove();
+
+    await waitFor(() => {
+      expect(reportUnsupported).toHaveBeenCalledWith("missing-video");
+      expect(
+        document.querySelector("[data-multicam-full-video-control]"),
+      ).toBeNull();
+    });
+    expect(video.style.transform).toBe("");
+    expect(video.style.transformOrigin).toBe("");
+  });
+
+  it("moves focus into the menu and restores it on Escape", () => {
+    const { settings } = setupPlayer();
+    mountControl(document, { session: activeSession });
+    const control = settings.previousElementSibling as HTMLElement;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    const trigger = ui.getByRole("button", { name: "Multicam video options" });
+
+    fireEvent.click(trigger);
+
+    const firstCamera = ui.getByRole("menuitem", { name: "Host" });
+    expect(control.shadowRoot?.activeElement).toBe(firstCamera);
+
+    fireEvent.keyDown(firstCamera, { key: "Escape" });
+
+    expect(ui.queryByRole("menu")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(control.shadowRoot?.activeElement).toBe(trigger);
+  });
+
+  it("moves menu focus with Arrow, Home, and End keys", () => {
+    const { settings } = setupPlayer();
+    mountControl(document, { session: activeSession });
+    const control = settings.previousElementSibling as HTMLElement;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    const trigger = ui.getByRole("button", { name: "Multicam video options" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const items = ui.getAllByRole("menuitem");
+
+    expect(control.shadowRoot?.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    expect(control.shadowRoot?.activeElement).toBe(items[1]);
+    fireEvent.keyDown(items[1]!, { key: "End" });
+    expect(control.shadowRoot?.activeElement).toBe(items.at(-1));
+    fireEvent.keyDown(items.at(-1)!, { key: "Home" });
+    expect(control.shadowRoot?.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: "ArrowUp" });
+    expect(control.shadowRoot?.activeElement).toBe(items.at(-1));
+  });
+
+  it("closes the camera menu when the viewer clicks outside it", () => {
+    const { settings } = setupPlayer();
+    mountControl(document, { session: activeSession });
+    const control = settings.previousElementSibling as HTMLElement;
+    const ui = within(control.shadowRoot as unknown as HTMLElement);
+    const trigger = ui.getByRole("button", { name: "Multicam video options" });
+    fireEvent.click(trigger);
+
+    fireEvent.pointerDown(document.body);
+
+    expect(ui.queryByRole("menu")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 });
