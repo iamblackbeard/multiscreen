@@ -22,9 +22,12 @@ function stubSessionStore(
   return {
     async findByChannelLogin(login) {
       const raw = sessions[login];
-      return raw as Awaited<
-        ReturnType<MulticamSessionStore["findByChannelLogin"]>
-      >;
+      if (raw === undefined) return undefined;
+      return {
+        broadcasterId: "141981764",
+        snapshot: raw,
+        streamId: "stream-123",
+      } as Awaited<ReturnType<MulticamSessionStore["findByChannelLogin"]>>;
     },
     async publish(input) {
       return input.snapshot;
@@ -37,7 +40,14 @@ async function startPublicApi(sessionStore: MulticamSessionStore) {
     // auth dependencies omitted — public endpoint does not require auth
     undefined,
     undefined,
-    { sessionStore },
+    {
+      sessionStore,
+      streamStatus: {
+        async findCurrentStream() {
+          return { streamId: "stream-123" };
+        },
+      },
+    },
   );
   const server = api.listen(0, "127.0.0.1");
   await once(server, "listening");

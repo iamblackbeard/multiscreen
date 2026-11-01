@@ -13,11 +13,19 @@ import { activeMulticamSessions } from "./schema.ts";
 export interface MulticamSessionStore {
   findByChannelLogin(
     channelLogin: string,
-  ): Promise<ActiveMulticamSession | undefined>;
+  ): Promise<
+    | {
+        broadcasterId: string;
+        snapshot: ActiveMulticamSession;
+        streamId: string | null;
+      }
+    | undefined
+  >;
   publish(input: {
     broadcasterId: string;
     channelLogin: string;
     snapshot: ActiveMulticamSession;
+    streamId: string;
   }): Promise<ActiveMulticamSession>;
 }
 
@@ -27,11 +35,15 @@ function sessionStoreFromDatabase(
   return {
     async findByChannelLogin(channelLogin) {
       const [session] = await database
-        .select({ snapshot: activeMulticamSessions.snapshot })
+        .select({
+          broadcasterId: activeMulticamSessions.broadcasterId,
+          snapshot: activeMulticamSessions.snapshot,
+          streamId: activeMulticamSessions.streamId,
+        })
         .from(activeMulticamSessions)
         .where(eq(activeMulticamSessions.channelLogin, channelLogin))
         .limit(1);
-      return session?.snapshot;
+      return session;
     },
     async publish(input) {
       const [session] = await database
@@ -41,6 +53,7 @@ function sessionStoreFromDatabase(
           set: {
             channelLogin: input.channelLogin,
             snapshot: input.snapshot,
+            streamId: input.streamId,
           },
           target: activeMulticamSessions.broadcasterId,
         })
@@ -68,11 +81,15 @@ export function createPostgresMulticamSessionStore(
   return {
     async findByChannelLogin(channelLogin) {
       const [session] = await database
-        .select({ snapshot: activeMulticamSessions.snapshot })
+        .select({
+          broadcasterId: activeMulticamSessions.broadcasterId,
+          snapshot: activeMulticamSessions.snapshot,
+          streamId: activeMulticamSessions.streamId,
+        })
         .from(activeMulticamSessions)
         .where(eq(activeMulticamSessions.channelLogin, channelLogin))
         .limit(1);
-      return session?.snapshot;
+      return session;
     },
     async publish(input) {
       const [session] = await database
@@ -82,6 +99,7 @@ export function createPostgresMulticamSessionStore(
           set: {
             channelLogin: input.channelLogin,
             snapshot: input.snapshot,
+            streamId: input.streamId,
           },
           target: activeMulticamSessions.broadcasterId,
         })

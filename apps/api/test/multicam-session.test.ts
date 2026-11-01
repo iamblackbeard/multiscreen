@@ -15,7 +15,10 @@ afterEach(async () => {
   await Promise.all(openApis.splice(0).map((api) => api.close()));
 });
 
-async function startTestApi() {
+async function startTestApi(streamId: string | null = "stream-123") {
+  let currentStreamId = streamId;
+  let currentTime = new Date("2026-11-01T12:00:00.000Z");
+  let streamStatusFails = false;
   const database = new PGlite();
   const authStore = await createPgliteAuthStore(database);
   const preferenceStore = await createPglitePreferenceStore(database);
@@ -47,8 +50,14 @@ async function startTestApi() {
     },
     preferenceStore,
     {
-      now: () => new Date("2026-11-01T12:00:00.000Z"),
+      now: () => currentTime,
       sessionStore,
+      streamStatus: {
+        async findCurrentStream() {
+          if (streamStatusFails) throw new Error("Twitch unavailable");
+          return currentStreamId ? { streamId: currentStreamId } : undefined;
+        },
+      },
     },
   );
   const server = api.listen(0, "127.0.0.1");
@@ -59,6 +68,15 @@ async function startTestApi() {
     async close() {
       server.close();
       await database.close();
+    },
+    setStreamId(nextStreamId: string | null) {
+      currentStreamId = nextStreamId;
+    },
+    setTime(isoTimestamp: string) {
+      currentTime = new Date(isoTimestamp);
+    },
+    setStreamStatusFails(fails: boolean) {
+      streamStatusFails = fails;
     },
   };
   openApis.push(testApi);
@@ -98,6 +116,32 @@ const preferences = {
 };
 
 describe("published Multicam sessions", () => {
+  it("rejects activation while the authenticated broadcaster is offline", async () => {
+    const testApi = await startTestApi(null);
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+
+    const enabled = await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    expect(enabled.status).toBe(409);
+    expect(await enabled.json()).toEqual({
+      code: "TWITCH_STREAM_OFFLINE",
+      message: "Start your Twitch stream first.",
+    });
+
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+    expect(await publicLookup.json()).toEqual({ active: false });
+  });
+
   it("publishes saved preferences for unauthenticated viewers", async () => {
     const testApi = await startTestApi();
     const sessionCookie = await signIn(testApi.baseUrl);
@@ -129,6 +173,127 @@ describe("published Multicam sessions", () => {
       mainSlot: "topRight",
       protocolVersion: 1,
       revision: 1,
+    });
+  });
+
+  it("stops publishing when Twitch reports a different broadcast", async () => {
+    const testApi = await startTestApi("stream-123");
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    testApi.setStreamId("stream-456");
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+
+    expect(await publicLookup.json()).toEqual({ active: false });
+  });
+
+  it("stops publishing when the broadcast goes offline", async () => {
+    const testApi = await startTestApi("stream-123");
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    testApi.setStreamId(null);
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+
+    expect(await publicLookup.json()).toEqual({ active: false });
+  });
+
+  it("stops publishing at the 24-hour fallback expiry", async () => {
+    const testApi = await startTestApi("stream-123");
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    testApi.setTime("2026-11-02T12:00:00.000Z");
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+
+    expect(await publicLookup.json()).toEqual({ active: false });
+  });
+
+  it("allows explicit reactivation of the same broadcast after expiry", async () => {
+    const testApi = await startTestApi("stream-123");
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+    testApi.setTime("2026-11-02T12:00:00.000Z");
+
+    const reenabled = await fetch(
+      `${testApi.baseUrl}/api/multicam/enable`,
+      {
+        headers: { Cookie: sessionCookie },
+        method: "POST",
+      },
+    );
+
+    expect(reenabled.status).toBe(200);
+    expect(await reenabled.json()).toMatchObject({
+      active: true,
+      expiresAt: "2026-11-03T12:00:00.000Z",
+    });
+    const publicLookup = await fetch(
+      `${testApi.baseUrl}/api/public/channels/camera_captain/multicam`,
+    );
+    expect(await publicLookup.json()).toMatchObject({
+      active: true,
+      expiresAt: "2026-11-03T12:00:00.000Z",
+    });
+  });
+
+  it("reports a Twitch status outage without publishing a session", async () => {
+    const testApi = await startTestApi("stream-123");
+    const sessionCookie = await signIn(testApi.baseUrl);
+    await fetch(`${testApi.baseUrl}/api/preferences`, {
+      body: JSON.stringify(preferences),
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      method: "PUT",
+    });
+    testApi.setStreamStatusFails(true);
+
+    const enabled = await fetch(`${testApi.baseUrl}/api/multicam/enable`, {
+      headers: { Cookie: sessionCookie },
+      method: "POST",
+    });
+
+    expect(enabled.status).toBe(502);
+    expect(await enabled.json()).toEqual({
+      code: "TWITCH_STATUS_UNAVAILABLE",
+      message: "Twitch stream status is temporarily unavailable.",
     });
   });
 });

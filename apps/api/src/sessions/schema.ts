@@ -5,4 +5,5 @@ export const activeMulticamSessions = pgTable("active_multicam_sessions", {
   broadcasterId: text("broadcaster_id").primaryKey(),
   channelLogin: text("channel_login").notNull().unique(),
   snapshot: jsonb("snapshot").$type<ActiveMulticamSession>().notNull(),
+  streamId: text("stream_id"),
 });

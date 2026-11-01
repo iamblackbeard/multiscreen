@@ -9,16 +9,22 @@ import { authenticatedStreamer } from "../auth/auth.ts";
 import type { AuthStore } from "../auth/store.ts";
 import type { PreferenceStore } from "../preferences/store.ts";
 import type { MulticamSessionStore } from "./store.ts";
+import type { TwitchStreamStatusClient } from "./twitch.ts";
 
 export interface MulticamSessionDependencies {
   now?: () => Date;
   sessionStore: MulticamSessionStore;
+  streamStatus: TwitchStreamStatusClient;
 }
 
 export function createMulticamSessionHandlers(
   authStore: AuthStore,
   preferenceStore: PreferenceStore,
-  { now = () => new Date(), sessionStore }: MulticamSessionDependencies,
+  {
+    now = () => new Date(),
+    sessionStore,
+    streamStatus,
+  }: MulticamSessionDependencies,
 ) {
   return {
     async enable(request: Request, response: Response) {
@@ -38,6 +44,25 @@ export function createMulticamSessionHandlers(
         });
         return;
       }
+      let stream: { streamId: string } | undefined;
+      try {
+        stream = await streamStatus.findCurrentStream(
+          streamer.twitchUserId,
+        );
+      } catch {
+        response.status(502).json({
+          code: "TWITCH_STATUS_UNAVAILABLE",
+          message: "Twitch stream status is temporarily unavailable.",
+        });
+        return;
+      }
+      if (!stream) {
+        response.status(409).json({
+          code: "TWITCH_STREAM_OFFLINE",
+          message: "Start your Twitch stream first.",
+        });
+        return;
+      }
       const snapshot = activeMulticamSessionSchema.parse({
         active: true,
         cameras: preferences.slots
@@ -54,17 +79,8 @@ export function createMulticamSessionHandlers(
           broadcasterId: streamer.twitchUserId,
           channelLogin: streamer.login.toLowerCase(),
           snapshot,
+          streamId: stream.streamId,
         }),
-      );
-    },
-
-    async publicLookup(request: Request, response: Response) {
-      const login = String(request.params.login).toLowerCase();
-      const session = await sessionStore.findByChannelLogin(login);
-      response.json(
-        session
-          ? activeMulticamSessionSchema.parse(session)
-          : inactiveMulticamSessionSchema.parse({ active: false }),
       );
     },
   };
@@ -78,6 +94,7 @@ export function createMulticamSessionHandlers(
 export function createPublicSessionHandler({
   now = () => new Date(),
   sessionStore,
+  streamStatus,
 }: MulticamSessionDependencies) {
   const inactive = inactiveMulticamSessionSchema.parse({ active: false });
 
@@ -85,7 +102,9 @@ export function createPublicSessionHandler({
     async lookup(request: Request, response: Response) {
       const login = String(request.params.login).toLowerCase();
 
-      let raw: unknown;
+      let raw: Awaited<
+        ReturnType<MulticamSessionStore["findByChannelLogin"]>
+      >;
       try {
         raw = await sessionStore.findByChannelLogin(login);
       } catch {
@@ -97,8 +116,7 @@ export function createPublicSessionHandler({
         response.json(inactive);
         return;
       }
-
-      const parsed = publicMulticamSessionSchema.safeParse(raw);
+      const parsed = publicMulticamSessionSchema.safeParse(raw.snapshot);
       if (!parsed.success || !parsed.data.active) {
         response.json(inactive);
         return;
@@ -106,6 +124,25 @@ export function createPublicSessionHandler({
 
       const snapshot = parsed.data;
       if (new Date(snapshot.expiresAt) <= now()) {
+        response.json(inactive);
+        return;
+      }
+
+      if (!raw.streamId) {
+        response.json(inactive);
+        return;
+      }
+
+      let currentStream: { streamId: string } | undefined;
+      try {
+        currentStream = await streamStatus.findCurrentStream(
+          raw.broadcasterId,
+        );
+      } catch {
+        response.json(inactive);
+        return;
+      }
+      if (currentStream?.streamId !== raw.streamId) {
         response.json(inactive);
         return;
       }
