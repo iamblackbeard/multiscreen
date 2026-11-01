@@ -55,6 +55,16 @@ function cookies(request: Request) {
   );
 }
 
+export async function authenticatedStreamer(
+  request: Request,
+  authStore: AuthStore,
+) {
+  const sessionToken = cookies(request)[SESSION_COOKIE];
+  return sessionToken
+    ? authStore.findSession(hash(sessionToken), new Date())
+    : undefined;
+}
+
 function cookieOptions(config: AuthConfig, maxAgeMs: number) {
   return {
     httpOnly: true,
@@ -175,10 +185,7 @@ export function createAuthHandlers({
     },
 
     async session(request: Request, response: Response) {
-      const sessionToken = cookies(request)[SESSION_COOKIE];
-      const session = sessionToken
-        ? await authStore.findSession(hash(sessionToken), new Date())
-        : undefined;
+      const session = await authenticatedStreamer(request, authStore);
 
       if (!session) {
         response.status(401).json({
