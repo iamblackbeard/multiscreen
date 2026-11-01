@@ -5,5 +5,5 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"]
   },
-  "include": ["entrypoints", "wxt.config.ts"]
+  "include": ["entrypoints", "src", "wxt.config.ts"]
 }
