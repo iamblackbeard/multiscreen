@@ -199,6 +199,27 @@ export function createPublicSessionHandler({
 }: MulticamSessionDependencies) {
   const inactive = inactiveMulticamSessionSchema.parse({ active: false });
 
+  function sendPublicSession(
+    request: Request,
+    response: Response,
+    session: typeof inactive | ActiveMulticamSession,
+  ) {
+    const etag = session.active
+      ? `"multicam-${session.revision}-${Date.parse(session.expiresAt)}"`
+      : '"multicam-inactive"';
+    response.set("Cache-Control", "no-cache");
+    response.set("ETag", etag);
+    const matches = (request.get("If-None-Match") ?? "")
+      .split(",")
+      .map((candidate) => candidate.trim().replace(/^W\//, ""))
+      .includes(etag);
+    if (matches) {
+      response.status(304).end();
+      return;
+    }
+    response.json(session);
+  }
+
   return {
     async lookup(request: Request, response: Response) {
       const login = String(request.params.login).toLowerCase();
@@ -209,28 +230,28 @@ export function createPublicSessionHandler({
       try {
         raw = await sessionStore.findByChannelLogin(login);
       } catch {
-        response.json(inactive);
+        sendPublicSession(request, response, inactive);
         return;
       }
 
       if (!raw) {
-        response.json(inactive);
+        sendPublicSession(request, response, inactive);
         return;
       }
       const parsed = publicMulticamSessionSchema.safeParse(raw.snapshot);
       if (!parsed.success || !parsed.data.active) {
-        response.json(inactive);
+        sendPublicSession(request, response, inactive);
         return;
       }
 
       const snapshot = parsed.data;
       if (new Date(snapshot.expiresAt) <= now()) {
-        response.json(inactive);
+        sendPublicSession(request, response, inactive);
         return;
       }
 
       if (!raw.streamId) {
-        response.json(inactive);
+        sendPublicSession(request, response, inactive);
         return;
       }
 
@@ -240,15 +261,15 @@ export function createPublicSessionHandler({
           raw.broadcasterId,
         );
       } catch {
-        response.json(inactive);
+        sendPublicSession(request, response, inactive);
         return;
       }
       if (currentStream?.streamId !== raw.streamId) {
-        response.json(inactive);
+        sendPublicSession(request, response, inactive);
         return;
       }
 
-      response.json(snapshot);
+      sendPublicSession(request, response, snapshot);
     },
   };
 }

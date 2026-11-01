@@ -109,6 +109,24 @@ describe("public multicam lookup", () => {
     expect(await response.json()).toEqual(activeSnapshot);
   });
 
+  it("returns no payload when the viewer already has the current revision", async () => {
+    const { baseUrl } = await startPublicApi(
+      stubSessionStore({ streamer42: activeSnapshot }),
+    );
+    const initial = await publicLookup(baseUrl, "streamer42");
+    const etag = initial.headers.get("ETag");
+
+    expect(etag).toBeTruthy();
+
+    const unchanged = await fetch(
+      `${baseUrl}/api/public/channels/streamer42/multicam`,
+      { headers: { "If-None-Match": etag! } },
+    );
+
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe("");
+  });
+
   it("normalises the channel login to lowercase before lookup", async () => {
     const { baseUrl } = await startPublicApi(
       stubSessionStore({ camera_captain: activeSnapshot }),
