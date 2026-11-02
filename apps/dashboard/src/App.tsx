@@ -39,6 +39,9 @@ export function App() {
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [fieldIssues, setFieldIssues] = useState<FieldIssue[]>([]);
+  const [sessionActionError, setSessionActionError] =
+    useState<ApiErrorResponse>();
+  const [sessionStatusError, setSessionStatusError] = useState(false);
 
   const updateCamera = (
     slot: StreamerPreferences["slots"][number]["slot"],
@@ -124,6 +127,34 @@ export function App() {
     );
   };
 
+  const enableMulticam = async () => {
+    setSessionActionError(undefined);
+    const response = await fetch("/api/multicam/enable", { method: "POST" });
+    if (!response.ok) {
+      setSessionActionError(apiErrorResponseSchema.parse(await response.json()));
+      return;
+    }
+    const live = activeMulticamSessionSchema.parse(await response.json());
+    setMulticamStatus({
+      active: true,
+      hasUnpublishedChanges: false,
+      live,
+    });
+  };
+
+  const loadMulticamStatus = async () => {
+    try {
+      const response = await fetch("/api/multicam");
+      if (!response.ok) throw new Error("Session status request failed");
+      setMulticamStatus(
+        ownerMulticamStatusSchema.parse(await response.json()),
+      );
+      setSessionStatusError(false);
+    } catch {
+      setSessionStatusError(true);
+    }
+  };
+
   useEffect(() => {
     const checkHealth = async () => {
       try {
@@ -164,12 +195,7 @@ export function App() {
           } else if (preferencesResponse.status === 404) {
             setPreferences(newStreamerPreferences);
           }
-          const multicamResponse = await fetch("/api/multicam");
-          if (multicamResponse.ok) {
-            setMulticamStatus(
-              ownerMulticamStatusSchema.parse(await multicamResponse.json()),
-            );
-          }
+          await loadMulticamStatus();
         } catch {
           // Authentication remains usable if preferences cannot be loaded.
         }
@@ -186,6 +212,9 @@ export function App() {
     connected: "API connected",
     unavailable: "API unavailable",
   }[apiStatus];
+  const multicamExpired =
+    multicamStatus?.active === true &&
+    Date.parse(multicamStatus.live.expiresAt) <= Date.now();
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
@@ -195,8 +224,32 @@ export function App() {
         </p>
         <h1 className="text-4xl font-bold tracking-tight">Twitch Multicam</h1>
         <p className="mt-4 max-w-xl text-lg text-slate-300">
-          Camera setup and live-session controls are coming next.
+          Set up the composite viewers will use, then publish it for the
+          current broadcast.
         </p>
+        <section
+          aria-labelledby="obs-setup-heading"
+          className="mt-8 rounded-2xl border border-slate-700 bg-slate-950 p-6"
+        >
+          <h2 className="text-2xl font-semibold" id="obs-setup-heading">
+            Build one 2×2 OBS scene
+          </h2>
+          <p className="mt-3 text-slate-300">
+            Place two to four unique camera feeds into fixed, equal quadrants.
+            Never duplicate a feed to fill the grid: design unused quadrants
+            with branding, schedules, or instructions instead.
+          </p>
+          <p className="mt-3 text-slate-300">
+            Top-left is a helpful default for your main camera, but any active
+            quadrant can be main.
+          </p>
+          <p className="mt-3 text-slate-300">
+            A 1080p composite gives each quadrant about 540p; a 1440p
+            composite gives each about 720p. Cropping cannot restore pixels
+            that were not delivered, and Multicam does not promise 4K
+            delivery.
+          </p>
+        </section>
         {authStatus === "anonymous" && (
           <a
             className="mt-8 inline-flex rounded-lg bg-violet-500 px-5 py-3 font-semibold text-white hover:bg-violet-400"
@@ -205,10 +258,45 @@ export function App() {
             Sign in with Twitch
           </a>
         )}
+        {authStatus === "unavailable" && (
+          <section className="mt-8 rounded-2xl border border-rose-400/40 bg-rose-950/30 p-5">
+            <h2 className="text-xl font-semibold text-rose-100">
+              Twitch sign-in needs attention
+            </h2>
+            <p className="mt-2 text-rose-100/80">
+              If Twitch login keeps failing, allow cookies for this dashboard
+              and confirm Twitch is reachable before trying again.
+            </p>
+            <a
+              className="mt-4 inline-flex rounded-lg bg-violet-500 px-4 py-2 font-semibold text-white hover:bg-violet-400"
+              href="/auth/twitch"
+            >
+              Try Twitch sign-in again
+            </a>
+          </section>
+        )}
         {authStatus === "authenticated" && streamer && (
           <>
             <p>Signed in as {streamer.login}</p>
-            {multicamStatus?.active && (
+            {sessionStatusError && (
+              <section className="mt-8 rounded-2xl border border-rose-400/40 bg-rose-950/30 p-5">
+                <h2 className="text-xl font-semibold text-rose-100">
+                  Live session status unavailable
+                </h2>
+                <p className="mt-2 text-rose-100/80">
+                  Your saved camera setup is safe. Check the API connection,
+                  then retry the live-session status request.
+                </p>
+                <button
+                  className="mt-4 rounded-lg border border-rose-300 px-4 py-2 font-semibold text-rose-100"
+                  onClick={() => void loadMulticamStatus()}
+                  type="button"
+                >
+                  Retry session status
+                </button>
+              </section>
+            )}
+            {multicamStatus?.active && !multicamExpired && (
               <section className="mt-8 rounded-2xl border border-violet-400/30 bg-slate-950 p-5">
                 <h2 className="text-xl font-semibold">Live configuration</h2>
                 <p>Live revision {multicamStatus.live.revision}</p>
@@ -236,19 +324,86 @@ export function App() {
                 </div>
               </section>
             )}
+            {multicamStatus?.active && multicamExpired && (
+              <section className="mt-8 rounded-2xl border border-amber-400/40 bg-amber-950/30 p-5">
+                <h2 className="text-xl font-semibold text-amber-100">
+                  Multicam session expired
+                </h2>
+                <p className="mt-2 text-amber-100/80">
+                  The 24-hour safety window ended. If this broadcast is still
+                  live, enable Multicam again to publish a fresh session.
+                </p>
+                <button
+                  className="mt-4 rounded-lg bg-amber-400 px-4 py-2 font-semibold text-slate-950 hover:bg-amber-300"
+                  onClick={() => void enableMulticam()}
+                  type="button"
+                >
+                  Re-enable Multicam
+                </button>
+              </section>
+            )}
             {multicamStatus && !multicamStatus.active && (
-              <p className="mt-8 rounded-2xl border border-slate-700 bg-slate-950 p-5">
-                Multicam is inactive
-              </p>
+              <section className="mt-8 rounded-2xl border border-slate-700 bg-slate-950 p-5">
+                <h2 className="text-xl font-semibold">
+                  {sessionActionError?.message ?? "Multicam is inactive"}
+                </h2>
+                <p className="mt-2 text-slate-300">
+                  {sessionActionError?.code === "TWITCH_STREAM_OFFLINE"
+                    ? "Go live on Twitch, then retry activation from this dashboard."
+                    : "Your saved setup is private until you enable it for the current Twitch broadcast."}
+                </p>
+                <button
+                  className="mt-4 rounded-lg bg-violet-500 px-4 py-2 font-semibold text-white hover:bg-violet-400"
+                  onClick={() => void enableMulticam()}
+                  type="button"
+                >
+                  {sessionActionError ? "Retry activation" : "Enable Multicam"}
+                </button>
+              </section>
             )}
             {preferences && (
-              <form
-                className="mt-8 grid grid-cols-2 gap-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void savePreferences();
-                }}
-              >
+              <>
+                <section
+                  aria-labelledby="configuration-preview-heading"
+                  className="mt-8"
+                >
+                  <h2
+                    className="text-2xl font-semibold"
+                    id="configuration-preview-heading"
+                  >
+                    Saved configuration preview
+                  </h2>
+                  <div className="mt-4 grid aspect-video grid-cols-2 overflow-hidden rounded-2xl border border-slate-600 bg-slate-950">
+                    {preferences.slots.map((camera) => (
+                      <div
+                        className={`flex min-h-32 flex-col items-center justify-center border border-slate-800 p-4 text-center ${camera.active ? "bg-violet-950/40" : "bg-slate-900"}`}
+                        key={`preview-${camera.slot}`}
+                      >
+                        {camera.active ? (
+                          <>
+                            <p className="text-lg font-semibold">
+                              {camera.label}
+                            </p>
+                            {camera.slot === preferences.mainSlot && (
+                              <p className="mt-2 rounded-full bg-violet-500/20 px-3 py-1 text-sm text-violet-200">
+                                {camera.label} · Main camera
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-slate-400">Unused quadrant</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <form
+                  className="mt-8 grid grid-cols-2 gap-4"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void savePreferences();
+                  }}
+                >
                 {fieldIssues
                   .filter(
                     (issue) =>
@@ -357,10 +512,58 @@ export function App() {
                     <p>Preferences could not be saved.</p>
                   )}
                 </div>
-              </form>
+                </form>
+              </>
             )}
           </>
         )}
+        <section
+          aria-labelledby="troubleshooting-heading"
+          className="mt-10 rounded-2xl border border-slate-700 bg-slate-950 p-6"
+        >
+          <h2 className="text-2xl font-semibold" id="troubleshooting-heading">
+            Troubleshooting
+          </h2>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <article>
+              <h3 className="font-semibold text-violet-200">
+                Twitch login fails
+              </h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Allow dashboard cookies, confirm Twitch is reachable, and
+                start sign-in again.
+              </p>
+            </article>
+            <article>
+              <h3 className="font-semibold text-violet-200">
+                Activation says offline
+              </h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Start the Twitch broadcast, wait for it to show as live, then
+                retry activation.
+              </p>
+            </article>
+            <article>
+              <h3 className="font-semibold text-violet-200">
+                Session expired
+              </h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Confirm the stream is still live and re-enable Multicam to
+                begin a fresh 24-hour session.
+              </p>
+            </article>
+            <article>
+              <h3 className="font-semibold text-violet-200">
+                Viewers see the wrong session
+              </h3>
+              <p className="mt-1 text-sm text-slate-300">
+                Confirm viewers opened the same channel and current broadcast.
+                If public status still differs from this dashboard, disable
+                Multicam and enable it again.
+              </p>
+            </article>
+          </div>
+        </section>
         <p
           className="mt-8 inline-flex rounded-full bg-slate-800 px-4 py-2 text-sm text-slate-200"
           role="status"
