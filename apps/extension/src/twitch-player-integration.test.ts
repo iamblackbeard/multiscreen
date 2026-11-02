@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { testApiBaseUrl } from "./test-environment.ts";
 import { startTwitchPlayerIntegration } from "./twitch-player-integration.ts";
 
 const activeSession = {
@@ -51,7 +52,7 @@ describe("Twitch player integration", () => {
       );
     const video = document.querySelector<HTMLVideoElement>("video")!;
     const stop = startTwitchPlayerIntegration({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       fetch,
       page: document,
     });

@@ -5,9 +5,9 @@ import {
   createPopupMessageHandler,
   type PopupMessage,
 } from "../src/popup-background.ts";
+import { requiredApiBaseUrl } from "../src/environment.ts";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ?? "https://api.multicam.tv";
+const API_BASE = requiredApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
 export default defineBackground({
   main() {

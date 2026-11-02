@@ -18,7 +18,9 @@ function sorted(values) {
 const chrome = await manifest("chrome-mv3");
 const firefox = await manifest("firefox-mv2");
 const apiPermissions = ["identity", "storage", "tabs"];
-const apiHosts = ["http://localhost:3000/*", "https://api.multicam.tv/*"];
+const apiBaseUrl = process.env.VITE_API_BASE_URL;
+assert.ok(apiBaseUrl, "VITE_API_BASE_URL is required to verify extension builds");
+const apiHosts = [`${new URL(apiBaseUrl).origin}/*`];
 
 assert.equal(chrome.manifest_version, 3);
 assert.deepEqual(sorted(chrome.permissions), sorted(apiPermissions));

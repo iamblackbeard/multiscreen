@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import { signInWithTwitch } from "./extension-auth.ts";
+import { testApiBaseUrl } from "./test-environment.ts";
 
 describe("extension Twitch authentication", () => {
   it("uses browser identity and exchanges the returned single-use code", async () => {
@@ -25,7 +26,7 @@ describe("extension Twitch authentication", () => {
     );
 
     const credentials = await signInWithTwitch({
-      apiBaseUrl: "https://api.multicam.test",
+      apiBaseUrl: testApiBaseUrl,
       fetchFromApi,
       identity: {
         getRedirectURL: () => "https://extension.multicam.test/callback",

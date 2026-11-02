@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createPopupMessageHandler } from "./popup-background.ts";
+import { testApiBaseUrl } from "./test-environment.ts";
 
 const preferences = {
   mainSlot: "topLeft" as const,
@@ -33,7 +34,7 @@ describe("popup background persistence", () => {
       set: vi.fn(async () => undefined),
     };
     const handleMessage = createPopupMessageHandler({
-      apiBaseUrl: "https://api.multicam.test",
+      apiBaseUrl: testApiBaseUrl,
       fetchFromApi,
       storage,
     });

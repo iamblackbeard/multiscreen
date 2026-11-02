@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { testApiBaseUrl } from "./test-environment.ts";
 import { startViewerConfigurationSync } from "./viewer-configuration-sync.ts";
 
 const activeSession = {
@@ -34,7 +35,7 @@ describe("viewer configuration synchronization", () => {
     const applySession = vi.fn();
 
     const stop = startViewerConfigurationSync({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       applySession,
       fetch,
       page: document,
@@ -45,7 +46,7 @@ describe("viewer configuration synchronization", () => {
       activeSession,
     ));
     expect(fetch).toHaveBeenCalledWith(
-      "https://api.multicam.tv/api/public/channels/camera_captain/multicam",
+      `${testApiBaseUrl}/api/public/channels/camera_captain/multicam`,
       expect.objectContaining({ headers: {} }),
     );
 
@@ -64,7 +65,7 @@ describe("viewer configuration synchronization", () => {
     );
 
     const stop = startViewerConfigurationSync({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       applySession: vi.fn(),
       fetch,
       page: document,
@@ -98,7 +99,7 @@ describe("viewer configuration synchronization", () => {
     );
 
     const stop = startViewerConfigurationSync({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       applySession: vi.fn(),
       fetch,
       page: document,
@@ -128,7 +129,7 @@ describe("viewer configuration synchronization", () => {
     const applySession = vi.fn();
 
     const stop = startViewerConfigurationSync({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       applySession,
       fetch,
       page: document,
@@ -140,7 +141,7 @@ describe("viewer configuration synchronization", () => {
 
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      "https://api.multicam.tv/api/public/channels/camera_captain/multicam",
+      `${testApiBaseUrl}/api/public/channels/camera_captain/multicam`,
       { headers: { "If-None-Match": '"revision-1"' } },
     );
     expect(applySession).toHaveBeenCalledTimes(1);
@@ -166,7 +167,7 @@ describe("viewer configuration synchronization", () => {
     const applySession = vi.fn();
 
     const stop = startViewerConfigurationSync({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       applySession,
       fetch,
       page: document,
@@ -176,7 +177,7 @@ describe("viewer configuration synchronization", () => {
 
     await vi.waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "https://api.multicam.tv/api/public/channels/second_channel/multicam",
+        `${testApiBaseUrl}/api/public/channels/second_channel/multicam`,
         expect.anything(),
       ),
     );
@@ -228,7 +229,7 @@ describe("viewer configuration synchronization", () => {
     const applySession = vi.fn();
 
     const stop = startViewerConfigurationSync({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       applySession,
       fetch,
       page: document,
@@ -260,7 +261,7 @@ describe("viewer configuration synchronization", () => {
     const applySession = vi.fn();
 
     const stop = startViewerConfigurationSync({
-      apiBase: "https://api.multicam.tv",
+      apiBase: testApiBaseUrl,
       applySession,
       fetch,
       page: document,

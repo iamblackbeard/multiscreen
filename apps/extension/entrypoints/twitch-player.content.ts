@@ -1,8 +1,9 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
+import { requiredApiBaseUrl } from "../src/environment.ts";
 import { startTwitchPlayerIntegration } from "../src/twitch-player-integration.ts";
 
-const API_BASE = "https://api.multicam.tv";
+const API_BASE = requiredApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
 export default defineContentScript({
   matches: ["https://www.twitch.tv/*"],
