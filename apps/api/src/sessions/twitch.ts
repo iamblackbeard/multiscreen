@@ -2,6 +2,9 @@ export interface TwitchStreamStatusClient {
   findCurrentStream(
     twitchUserId: string,
   ): Promise<{ streamId: string } | undefined>;
+  findUserByLogin?(
+    login: string,
+  ): Promise<{ login: string; twitchUserId: string } | undefined>;
 }
 
 export function createTwitchStreamStatusClient({
@@ -98,6 +101,42 @@ export function createTwitchStreamStatusClient({
         throw new Error("Twitch returned invalid stream status");
       }
       return { streamId: stream.id };
+    },
+
+    async findUserByLogin(login) {
+      const accessToken = await getAppAccessToken();
+      const userResponse = await fetchFromTwitch(
+        `https://api.twitch.tv/helix/users?login=${encodeURIComponent(login)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Client-Id": clientId,
+          },
+        },
+      );
+      if (!userResponse.ok) throw new Error("Twitch user lookup failed");
+      const payload: unknown = await userResponse.json();
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        !("data" in payload) ||
+        !Array.isArray(payload.data)
+      ) {
+        throw new Error("Twitch returned an invalid user lookup");
+      }
+      const user: unknown = payload.data[0];
+      if (user === undefined) return undefined;
+      if (
+        typeof user !== "object" ||
+        user === null ||
+        !("id" in user) ||
+        typeof user.id !== "string" ||
+        !("login" in user) ||
+        typeof user.login !== "string"
+      ) {
+        throw new Error("Twitch returned an invalid user lookup");
+      }
+      return { login: user.login, twitchUserId: user.id };
     },
   };
 }

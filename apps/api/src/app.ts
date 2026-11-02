@@ -11,6 +11,7 @@ import {
 } from "./auth/auth.ts";
 import { createPreferenceHandlers } from "./preferences/preferences.ts";
 import type { PreferenceStore } from "./preferences/store.ts";
+import { createPopupContextHandler } from "./popup/context.ts";
 import {
   createMulticamSessionHandlers,
   type MulticamSessionDependencies,
@@ -46,6 +47,19 @@ export function createApi(
     const auth = createAuthHandlers(authDependencies);
     api.get("/auth/twitch", auth.begin);
     api.get("/auth/twitch/callback", auth.callback);
+    api.get("/auth/extension/twitch", auth.beginExtension);
+    api.get(
+      "/auth/extension/twitch/callback",
+      auth.extensionCallback,
+    );
+    api.post(
+      "/api/extension-auth/exchange",
+      auth.exchangeExtensionCode,
+    );
+    api.post(
+      "/api/extension-auth/refresh",
+      auth.refreshExtensionSession,
+    );
     api.get("/api/auth/session", auth.session);
     if (preferenceStore) {
       const preferences = createPreferenceHandlers(
@@ -55,6 +69,14 @@ export function createApi(
       api.get("/api/preferences", preferences.get);
       api.put("/api/preferences", preferences.put);
       if (sessionDependencies) {
+        api.get(
+          "/api/popup-context",
+          createPopupContextHandler(
+            authDependencies.authStore,
+            preferenceStore,
+            sessionDependencies,
+          ),
+        );
         const sessions = createMulticamSessionHandlers(
           authDependencies.authStore,
           preferenceStore,

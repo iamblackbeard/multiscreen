@@ -29,6 +29,13 @@
       "when": 1793537000000,
       "tag": "0003_bind_sessions_to_streams",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793590000000,
+      "tag": "0004_extension_auth",
+      "breakpoints": true
     }
   ]
 }

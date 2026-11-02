@@ -28,6 +28,12 @@ async function startTestApi(streamId: string | null = "stream-123") {
       authConfig: {
         callbackUrl: "https://api.multicam.test/auth/twitch/callback",
         dashboardUrl: "https://dashboard.multicam.test/",
+        extensionAccessTokenTtlMs: 15 * 60 * 1_000,
+        extensionCallbackUrl:
+          "https://api.multicam.test/auth/extension/twitch/callback",
+        extensionExchangeCodeTtlMs: 60 * 1_000,
+        extensionRedirectOrigins: ["https://extension.multicam.test"],
+        extensionRefreshTokenTtlMs: 7 * 24 * 60 * 60 * 1_000,
         oauthStateTtlMs: 600_000,
         secureCookies: true,
         sessionTtlMs: 86_400_000,

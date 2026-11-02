@@ -6,7 +6,11 @@ export default defineConfig({
   manifest: {
     name: "Twitch Multicam",
     description: "Choose a camera angle on supported Twitch streams.",
-    permissions: [],
+    host_permissions: [
+      "http://localhost:3000/*",
+      "https://api.multicam.tv/*",
+    ],
+    permissions: ["identity", "storage", "tabs"],
   },
   webExt: {
     disabled: true,

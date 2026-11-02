@@ -25,6 +25,12 @@ async function startTestApi() {
       authConfig: {
         callbackUrl: "https://api.multicam.test/auth/twitch/callback",
         dashboardUrl: "https://dashboard.multicam.test/",
+        extensionAccessTokenTtlMs: 15 * 60 * 1_000,
+        extensionCallbackUrl:
+          "https://api.multicam.test/auth/extension/twitch/callback",
+        extensionExchangeCodeTtlMs: 60 * 1_000,
+        extensionRedirectOrigins: ["https://extension.multicam.test"],
+        extensionRefreshTokenTtlMs: 7 * 24 * 60 * 60 * 1_000,
         oauthStateTtlMs: 10 * 60 * 1_000,
         secureCookies: true,
         sessionTtlMs: 24 * 60 * 60 * 1_000,

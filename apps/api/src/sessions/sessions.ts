@@ -20,7 +20,7 @@ export interface MulticamSessionDependencies {
   streamStatus: TwitchStreamStatusClient;
 }
 
-function preferencesDifferFromLive(
+export function preferencesDifferFromLive(
   preferences: StreamerPreferences,
   live: ActiveMulticamSession,
 ) {

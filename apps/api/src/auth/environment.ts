@@ -5,6 +5,7 @@ import { createTwitchAuthClient } from "./twitch.ts";
 const requiredSettings = [
   "DATABASE_URL",
   "DASHBOARD_URL",
+  "EXTENSION_REDIRECT_ORIGINS",
   "TWITCH_CALLBACK_URL",
   "TWITCH_CLIENT_ID",
   "TWITCH_CLIENT_SECRET",
@@ -31,6 +32,21 @@ export function authDependenciesFromEnvironment(
     authConfig: {
       callbackUrl: environment.TWITCH_CALLBACK_URL!,
       dashboardUrl: environment.DASHBOARD_URL!,
+      extensionAccessTokenTtlMs: 15 * 60 * 1_000,
+      extensionCallbackUrl:
+        environment.TWITCH_EXTENSION_CALLBACK_URL ??
+        new URL(
+          "/auth/extension/twitch/callback",
+          environment.TWITCH_CALLBACK_URL!,
+        ).toString(),
+      extensionExchangeCodeTtlMs: 60 * 1_000,
+      extensionRedirectOrigins: (
+        environment.EXTENSION_REDIRECT_ORIGINS ?? ""
+      )
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+      extensionRefreshTokenTtlMs: 7 * 24 * 60 * 60 * 1_000,
       oauthStateTtlMs: 10 * 60 * 1_000,
       secureCookies: environment.NODE_ENV === "production",
       sessionTtlMs: 24 * 60 * 60 * 1_000,

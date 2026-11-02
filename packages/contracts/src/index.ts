@@ -158,3 +158,18 @@ export const ownerMulticamStatusSchema = z.discriminatedUnion("active", [
 ]);
 
 export type OwnerMulticamStatus = z.infer<typeof ownerMulticamStatusSchema>;
+
+export const popupContextSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("owner"),
+    multicam: ownerMulticamStatusSchema,
+    preferences: streamerPreferencesSchema,
+  }),
+  z.object({
+    kind: z.literal("viewer"),
+    session: activeMulticamSessionSchema,
+  }),
+  z.object({ kind: z.literal("inactive") }),
+]);
+
+export type PopupContext = z.infer<typeof popupContextSchema>;
