@@ -3,7 +3,7 @@ import { defineConfig } from "wxt";
 
 export default defineConfig({
   modules: ["@wxt-dev/module-react"],
-  manifest: {
+  manifest: ({ browser }) => ({
     name: "Twitch Multicam",
     description: "Choose a camera angle on supported Twitch streams.",
     host_permissions: [
@@ -11,7 +11,20 @@ export default defineConfig({
       "https://api.multicam.tv/*",
     ],
     permissions: ["identity", "storage", "tabs"],
-  },
+    ...(browser === "firefox"
+      ? {
+          browser_specific_settings: {
+            gecko: {
+              data_collection_permissions: {
+                required: ["authenticationInfo", "websiteActivity"],
+              },
+              id: "twitch-multicam@hackathon.local",
+              strict_min_version: "140.0",
+            },
+          },
+        }
+      : {}),
+  }),
   webExt: {
     disabled: true,
   },

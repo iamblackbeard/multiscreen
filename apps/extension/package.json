@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "wxt --host 127.0.0.1 --port 5174",
-    "build": "wxt build",
+    "build": "npm run build:chrome && npm run build:firefox && npm run verify:builds",
+    "build:chrome": "wxt build -b chrome --mv3",
+    "build:firefox": "wxt build -b firefox --mv2",
+    "verify:builds": "node ../../scripts/verify-extension-builds.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
